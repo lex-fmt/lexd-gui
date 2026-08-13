@@ -68,10 +68,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Reclaim runner disk space
-        if: runner.os == 'Linux'
-        run: ./script/lexed-ci-reclaim-disk
-
       # Zed's CI-only `-D warnings` trick: cargo merges a config placed in a
       # parent directory of the workspace, so the checkout itself stays clean.
       - name: Set up CI cargo config
@@ -115,9 +111,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 350
-
-      - name: Reclaim runner disk space
-        run: ./script/lexed-ci-reclaim-disk
 
       - name: Set up CI cargo config
         run: |
