@@ -6,6 +6,9 @@ config instead of editing Zed-owned files.** Before any change, read
 `docs/lexed/fork-strategy.md` (disable ladder, licensing, phases). Base upstream
 commit is recorded in `ZED_BASE`.
 
+On session start, run `script/lexed-install-hooks` (installs the git hooks if
+they are missing; see `docs/lexed/dev-setup.md`).
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.

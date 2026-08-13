@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+
+# Print the package names of workspace crates that changed relative to
+# origin/main. Shared by the pre-push hooks (script/lexed-clippy-changed,
+# script/lexed-test-changed) and reusable by CI to scope PR runs.
+#
+# Usage: script/lexed-changed-crates [name-prefix]
+#   name-prefix: only print crates whose package name starts with this.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+prefix="${1:-}"
+
+if ! git rev-parse --verify --quiet origin/main >/dev/null; then
+    echo "error: origin/main not found. Fetch it with: git fetch origin main" >&2
+    exit 1
+fi
+
+base="$(git merge-base HEAD origin/main)"
+
+# Diffing against the working tree rather than HEAD so that uncommitted work
+# counts too — a pre-push run should see whatever is on disk.
+git diff --name-only "$base" -- crates |
+    cut -d/ -f2 |
+    sort -u |
+    while read -r dir; do
+        manifest="crates/$dir/Cargo.toml"
+        # Absent for a crate the change deleted.
+        [ -f "$manifest" ] || continue
+        # The package name is not always the directory name, so read it.
+        name="$(awk -F'"' '/^name[[:space:]]*=/ { print $2; exit }' "$manifest")"
+        [ -n "$name" ] || continue
+        case "$name" in
+        "$prefix"*) echo "$name" ;;
+        esac
+    done

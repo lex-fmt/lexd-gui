@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+
+# Session bootstrap: install the lefthook git hooks if they are missing, and
+# name the install command for any check tool that is absent.
+#
+# This runs at the start of every agent session, so it never fails: a missing
+# tool is a warning here and a loud failure later, inside the hook that needs
+# it. Silent when everything is already in place.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+if ! command -v lefthook >/dev/null 2>&1; then
+    echo "lexed: lefthook is not installed, so the git hooks are inactive."
+    echo "lexed:   install it with: brew install lefthook"
+    exit 0
+fi
+
+hook="$(git rev-parse --git-path hooks/pre-commit)"
+if [ ! -f "$hook" ] || ! grep -q lefthook "$hook"; then
+    lefthook install >/dev/null
+    echo "lexed: installed the lefthook git hooks."
+fi
+
+command -v typos >/dev/null 2>&1 ||
+    echo "lexed: 'typos' is missing; the pre-commit typos check will fail. Install it with: brew install typos-cli"
+
+command -v shellcheck >/dev/null 2>&1 ||
+    echo "lexed: 'shellcheck' is missing; the pre-commit shell check will fail. Install it with: brew install shellcheck"
+
+exit 0
