@@ -57,13 +57,13 @@ Two corollaries that are easy to get wrong:
 When switching something off, work down this list and stop at the first rung
 that works.
 
-| Rung | Mechanism | Diff cost |
-|---|---|---|
-| 1 | Bundled default settings JSON | **Near zero.** Config-only edit. |
-| 2 | Don't call its `init()` at startup | One deleted line, one file. |
-| 3 | Drop the crate from `Cargo.toml` | Manifest-only. Trivial conflicts. |
-| 4 | Cargo feature flag | Manifest plus attribute lines. |
-| 5 | Inline conditional | **Last resort.** |
+| Rung | Mechanism                          | Diff cost                         |
+| ---- | ---------------------------------- | --------------------------------- |
+| 1    | Bundled default settings JSON      | **Near zero.** Config-only edit.  |
+| 2    | Don't call its `init()` at startup | One deleted line, one file.       |
+| 3    | Drop the crate from `Cargo.toml`   | Manifest-only. Trivial conflicts. |
+| 4    | Cargo feature flag                 | Manifest plus attribute lines.    |
+| 5    | Inline conditional                 | **Last resort.**                  |
 
 If you reach rung 5, the upstream edit must be a single call into a function
 defined in a Lex-owned crate — one line, not a block. The canonical example

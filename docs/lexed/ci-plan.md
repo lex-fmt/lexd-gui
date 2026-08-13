@@ -46,6 +46,7 @@ ships in this tree.
 
   It is the one workflow missing it; `cargo xtask workflows` fails on the repo
   today because of it.
+
 - The guard is at 59/60. No step in this plan touches a new upstream file, but
   the next unrelated change might; when it happens, raise the ceiling
   deliberately in the workflow file with a commit message that says why
@@ -62,11 +63,11 @@ both pre-commit and pre-push; on a Zed-sized workspace a whole-tree
 `clippy --all-targets --all-features` or a nextest run in a hook is unusable
 and developers will `--no-verify` around it. So:
 
-| Hook | Checks | Budget |
-|---|---|---|
-| pre-commit | `cargo fmt --all -- --check`; `typos` (config `typos.toml`); `script/shellcheck-scripts error` when `script/*` staged; prettier check via `script/prettier` when `docs/**` or `assets/settings/default.json` staged | seconds |
-| pre-push | `script/lexed-clippy-changed` — clippy `-p <crate>` for each crate changed vs `origin/main` (dev profile, `--all-targets`, `-D warnings`); `cargo nextest run -p <crate>` for changed `lex_*` crates only | ~1–3 min warm |
-| CI | the full gate (below): workspace clippy, full style pass, tests, licenses | unbounded |
+| Hook       | Checks                                                                                                                                                                                                              | Budget        |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| pre-commit | `cargo fmt --all -- --check`; `typos` (config `typos.toml`); `script/shellcheck-scripts error` when `script/*` staged; prettier check via `script/prettier` when `docs/**` or `assets/settings/default.json` staged | seconds       |
+| pre-push   | `script/lexed-clippy-changed` — clippy `-p <crate>` for each crate changed vs `origin/main` (dev profile, `--all-targets`, `-D warnings`); `cargo nextest run -p <crate>` for changed `lex_*` crates only           | ~1–3 min warm |
+| CI         | the full gate (below): workspace clippy, full style pass, tests, licenses                                                                                                                                           | unbounded     |
 
 `script/lexed-clippy-changed`: derive changed crates from
 `git diff --name-only @{upstream}...HEAD` mapped to `crates/*` dirs; fall back
@@ -102,7 +103,7 @@ Jobs (independent, `fail-fast: false`):
   upstream diff), `Swatinem/rust-cache@v2`, `script/linux` +
   `script/download-wasi-sdk` on ubuntu, then `./script/clippy`.
 - **tests** (ubuntu, macos): `cargo nextest run --workspace --no-fail-fast
-  --no-tests=warn` honoring `.config/nextest.toml`, via the `run_tests`
+--no-tests=warn` honoring `.config/nextest.toml`, via the `run_tests`
   composite action. **Open question — runtime.** Zed runs this on 32-vCPU
   machines; on 4-core hosted runners the full suite may be multi-hour. Start
   with a PR-scoped filterset (Zed's own pattern: `-E 'rdeps(<changed pkgs>)'`
@@ -110,7 +111,7 @@ Jobs (independent, `fail-fast: false`):
   run the full workspace suite on `main` pushes only. Measure, then decide
   whether to buy larger hosted runners.
 - **deps & security** (ubuntu): `cargo machete`, `cargo audit`, `cargo deny
-  check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
+check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
   stream; this is the fork's security posture) and are net-new: add
   `deny.toml` tuned to Zed's triple-licensing (GPL/AGPL/Apache split) so it
   passes on the current tree.
@@ -144,7 +145,7 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   identity until we deliberately adopt preview/stable channels).
 - **build** (macos-latest, matrix `aarch64-apple-darwin` / `x86_64-apple-darwin`
   — x86_64 cross-compiles fine on arm64 runners): run `script/bundle-mac
-  <triple>` **without signing secrets**, which takes its existing unsigned
+<triple>` **without signing secrets**, which takes its existing unsigned
   path (ad-hoc sign). Upload `bundle-<arch>` containing the DMG **and the
   `.app` tar'd** (`Lexed-<arch>.unsigned-app.tar.gz`). The tar is mandatory:
   `actions/upload-artifact` destroys symlinks and exec bits inside a `.app`
@@ -203,16 +204,16 @@ churn), map from Doppler keys in one place. New `script/lexed-secrets-sync`
 - Reads a small table in the script (or `script/lexed-secrets.toml`):
   gh-secret-name → doppler key, e.g.
 
-  | GitHub secret | Contents |
-  |---|---|
-  | `MACOS_CERTIFICATE` | base64 Developer ID Application `.p12` |
-  | `MACOS_CERTIFICATE_PASSWORD` | p12 password (empty is a valid value) |
-  | `APPLE_NOTARIZATION_KEY` | App Store Connect `.p8` contents |
-  | `APPLE_NOTARIZATION_KEY_ID` | ASC key id |
-  | `APPLE_NOTARIZATION_ISSUER_ID` | ASC issuer UUID |
+  | GitHub secret                  | Contents                               |
+  | ------------------------------ | -------------------------------------- |
+  | `MACOS_CERTIFICATE`            | base64 Developer ID Application `.p12` |
+  | `MACOS_CERTIFICATE_PASSWORD`   | p12 password (empty is a valid value)  |
+  | `APPLE_NOTARIZATION_KEY`       | App Store Connect `.p8` contents       |
+  | `APPLE_NOTARIZATION_KEY_ID`    | ASC key id                             |
+  | `APPLE_NOTARIZATION_ISSUER_ID` | ASC issuer UUID                        |
 
 - Resolves each via `doppler secrets get <KEY> --plain --project <p> --config
-  <c>` (ambient `doppler login`, no token handling), pushes via
+<c>` (ambient `doppler login`, no token handling), pushes via
   `gh secret set NAME --repo lex-fmt/lexd-gui` **with the value on stdin,
   never argv**. `--dry-run` prints names only. One-line-per-secret output,
   `N set / N failed` summary, exit 1 on any failure.
@@ -226,7 +227,7 @@ churn), map from Doppler keys in one place. New `script/lexed-secrets-sync`
 Weekly cron + `workflow_dispatch`. Read-only, never pushes:
 
 1. Checkout with full history; `git fetch https://github.com/zed-industries/zed
-   main` (and tags).
+main` (and tags).
 2. Attempt `git rebase --onto <target> $(cat ZED_BASE)` on a throwaway
    worktree, where `<target>` is upstream `main` for the weekly canary
    (fork-strategy's actual rebase cadence is quarterly onto stable tags; the
@@ -240,14 +241,14 @@ Weekly cron + `workflow_dispatch`. Read-only, never pushes:
 
 ## Sequencing
 
-| Phase | Deliverable | Depends on |
-|---|---|---|
-| 0 | `permissions:` fix in `lexed_diff_guard.yml` | — |
-| 1 | `lefthook.yml` + `script/lexed-clippy-changed` + README setup note | — |
-| 2 | `lexed_checks.yml` (style, clippy, scoped tests, deps/audit/deny, licenses) | 1 (shares scripts) |
-| 3 | Apple identities in Doppler + `script/lexed-secrets-sync` | human: Apple accounts |
-| 4 | `bundle-mac` identity parameterization + `lexed_release.yml` chain | 3 |
-| 5 | `lexed_rebase_check.yml` | — (parallel any time) |
+| Phase | Deliverable                                                                 | Depends on            |
+| ----- | --------------------------------------------------------------------------- | --------------------- |
+| 0     | `permissions:` fix in `lexed_diff_guard.yml`                                | —                     |
+| 1     | `lefthook.yml` + `script/lexed-clippy-changed` + README setup note          | —                     |
+| 2     | `lexed_checks.yml` (style, clippy, scoped tests, deps/audit/deny, licenses) | 1 (shares scripts)    |
+| 3     | Apple identities in Doppler + `script/lexed-secrets-sync`                   | human: Apple accounts |
+| 4     | `bundle-mac` identity parameterization + `lexed_release.yml` chain          | 3                     |
+| 5     | `lexed_rebase_check.yml`                                                    | — (parallel any time) |
 
 Each phase is a separate draft PR; the diff guard keeps us honest about
 upstream touches (expected: zero new upstream files; `bundle-mac` and
