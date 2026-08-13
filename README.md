@@ -1,49 +1,53 @@
-# Zed
+# Lexed (Zed fork)
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
+Lexed is a desktop editor for [Lex](https://lex.ing), a plain-text markup language
+for ideas, aimed at **non-technical writers**.
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+This repository is a fork of the [Zed editor](https://github.com/zed-industries/zed)
+by Zed Industries. It is **not** Zed, and it is not affiliated with or endorsed by
+Zed Industries. All credit for the underlying editor — GPUI, the editor core,
+tree-sitter integration, LSP support, and everything else this fork builds on —
+belongs to the Zed project and its contributors.
 
----
+## For agents and contributors: read this first
 
-### Installation
+**The governing invariant of this fork: minimize the number of upstream files
+touched. Drive it toward zero.**
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or install Zed via your local package manager ([macOS](https://zed.dev/docs/installation#macos)/[Linux](https://zed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://zed.dev/docs/windows#package-managers)).
+Every line changed in a file Zed owns is a permanent rebase conflict. Every line
+added in a file Zed has never seen (a new `lex_*` crate, a bundled config, a doc)
+is free forever. Hide features via bundled default settings; don't delete them.
+Never wrap upstream code in inline conditionals when a settings default or a
+removed `init()` call will do.
 
-Other platforms are not yet available:
+The full strategy — the disable ladder, licensing analysis, work phases, and
+rebase discipline — lives in [`docs/lexed/fork-strategy.md`](docs/lexed/fork-strategy.md).
+Read it before changing anything.
 
-- Web ([tracking discussion](https://github.com/zed-industries/zed/discussions/26195))
+The upstream commit this fork is based on is recorded in [`ZED_BASE`](ZED_BASE).
+Every rebase updates it.
 
-### Developing Zed
+## Layout
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
+- Lex-specific code lives in new crates under `crates/` named `lex_*`.
+- Lexed docs live under `docs/lexed/`.
+- Everything else is upstream Zed and should stay byte-identical wherever possible.
 
-### Contributing
+## Building
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
+Same as upstream Zed: `cargo build` (see `docs/src/development/` for platform
+setup). Use `./script/clippy` instead of `cargo clippy`.
 
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+## Licensing
 
-### Licensing
+Zed is licensed per component: `crates/gpui` under Apache-2.0, `crates/collab`
+under AGPL-3.0-or-later, and the rest — including the editor — under
+GPL-3.0-or-later. Per-crate `LICENSE-*` symlinks are authoritative.
 
-Zed source code is licensed primarily under GPL-3.0-or-later, with Apache-2.0 components where marked.
+**Lexed binaries are therefore distributed under GPL-3.0-or-later.** Lex crates
+that are compiled in keep their MIT headers and remain MIT on crates.io;
+`lex-lsp` runs as a separate MIT-licensed process. Release builds must publish
+corresponding source alongside every binary.
 
-License information for third party dependencies must be correctly provided for CI to pass.
-
-We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
-
-- Is it showing a `no license specified` error for a crate you've created? If so, add `publish = false` under `[package]` in your crate's Cargo.toml.
-- Is the error `failed to satisfy license requirements` for a dependency? If so, first determine what license the project has and whether this system is sufficient to comply with this license's requirements. If you're unsure, ask a lawyer. Once you've verified that this system is acceptable add the license's SPDX identifier to the `accepted` array in `script/licenses/zed-licenses.toml`.
-- Is `cargo-about` unable to find the license for a dependency? If so, add a clarification field at the end of `script/licenses/zed-licenses.toml`, as specified in the [cargo-about book](https://embarkstudios.github.io/cargo-about/cli/generate/config.html#crate-configuration).
-
-## Sponsorship
-
-Zed is developed by **Zed Industries, Inc.**, a for-profit company.
-
-If you’d like to financially support the project, you can do so via GitHub Sponsors.
-Sponsorships go directly to Zed Industries and are used as general company revenue.
-There are no perks or entitlements associated with sponsorship.
-
+"Zed", the Zed logo, and Zed app icons are trademarks of Zed Industries and are
+not covered by the code licenses; they must not appear in Lexed distributions.

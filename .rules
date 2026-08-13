@@ -1,3 +1,11 @@
+# Lexed fork — read first
+
+This repo is Lexed, a fork of Zed for the Lex format (lex.ing). Governing
+invariant: **minimize upstream files touched — add `lex_*` crates and bundled
+config instead of editing Zed-owned files.** Before any change, read
+`docs/lexed/fork-strategy.md` (disable ladder, licensing, phases). Base upstream
+commit is recorded in `ZED_BASE`.
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
