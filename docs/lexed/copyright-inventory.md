@@ -29,7 +29,7 @@ display names, application menu, About window, single-instance dialog.
 | `assets/badge/v0.json` | shields.io badge with the full Z logo inline | Deleted |
 | `assets/images/zed_x_copilot.svg` | Zed wordmark × Copilot lockup | Deleted (unreferenced; `assets/icons/copilot.svg` covers the need) |
 | `"Zed (Default)"` icon theme name | `assets/settings/default.json` + `DEFAULT_ICON_THEME_NAME` in `crates/theme/src/icon_theme.rs` | Rename to "Lexed (Default)" — small code+settings change, do together with the icon redraws |
-| `crates/zed/resources/flatpak/zed.metainfo.xml.in`, `zed.desktop.in`, `windows/zed.iss`, `snap/snapcraft.yaml.in` | Zed Industries naming/attribution throughout Linux/Windows packaging | Rework when those platforms get packaging; nothing ships from them today |
+| `crates/zed/resources/flatpak/zed.metainfo.xml.in`, `zed.desktop.in`, `windows/zed.iss`, `snap/snapcraft.yaml.in`, `Permissions.plist`, `DocumentTypes.plist` | Zed Industries naming/attribution throughout packaging resources | **Done** (branding sweep) — all display strings, publisher fields, ids, and URLs now Lexed/lex.ing. Still needed before actual Linux/Windows distribution: a *functional* pass over `script/bundle-linux`, `script/bundle-windows.ps1`, `script/flatpak/bundle-flatpak`, `script/install.sh`/`uninstall.sh`, and the release workflows, which still use the old `zed` binary/artifact names and `dev.zed.Zed*` ids; snap/flatpak templates and those scripts must be reconciled in that pass. Screenshot URLs in the metainfo point at `https://lex.ing/img/flatpak/` and need real assets before any flatpak submission. |
 
 ### Must go — misrepresentation (not copyright)
 
