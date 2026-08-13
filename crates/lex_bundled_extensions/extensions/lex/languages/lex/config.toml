@@ -1,0 +1,7 @@
+name = "Lex"
+grammar = "lex"
+path_suffixes = ["lex"]
+line_comments = [":: note :: "]
+tab_size = 2
+hard_tabs = false
+soft_wrap = "prefer_line"

@@ -10143,6 +10143,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
+name = "lex_bundled_extensions"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "paths",
+ "rust-embed",
+ "serde",
+ "tempfile",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "libbz2-rs-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23348,6 +23361,7 @@ dependencies = [
  "language_selector",
  "language_tools",
  "languages",
+ "lex_bundled_extensions",
  "line_ending_selector",
  "log",
  "lsp_locations",

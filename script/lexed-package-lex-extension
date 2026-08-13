@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Package the zed-lex extension and vendor the built artifacts into
+# crates/lex_bundled_extensions/extensions/lex, where they are embedded into
+# the Lexed binary and pre-installed at startup.
+#
+# Usage: script/lexed-package-lex-extension <path-to-zed-lex-checkout>
+#
+# Requires network access (crates.io for the extension's dependencies, GitHub
+# for the tree-sitter-lex grammar, and the wasi-sdk download on first run).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+src=${1:?usage: script/lexed-package-lex-extension <path-to-zed-lex-checkout>}
+staging=$(mktemp -d)
+trap 'rm -rf "$staging"' EXIT
+
+# Copy the extension source, dropping build outputs from previous packaging
+# runs. Themes are stripped because extension_cli enforces the registry rule
+# that theme-providing extensions must provide nothing else.
+rsync -a \
+  --exclude .git \
+  --exclude target \
+  --exclude grammars \
+  --exclude extension.wasm \
+  --exclude themes \
+  "$src/" "$staging/src/"
+
+cargo run -p extension_cli -- \
+  --source-dir "$staging/src" \
+  --scratch-dir "$staging/scratch" \
+  --output-dir "$staging/out"
+
+dest=crates/lex_bundled_extensions/extensions/lex
+rm -rf "$dest"
+mkdir -p "$dest"
+tar -xzf "$staging/out/archive.tar.gz" -C "$dest"
+
+echo "Vendored into $dest:"
+grep '^version' "$dest/extension.toml"

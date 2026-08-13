@@ -1,0 +1,3 @@
+# The repo root ignores *.wasm, but the packaged extension artifacts vendored
+# under extensions/ (extension.wasm, grammar wasm) must be committed.
+!*.wasm

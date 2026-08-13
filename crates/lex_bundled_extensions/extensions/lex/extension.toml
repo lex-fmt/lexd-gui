@@ -1,0 +1,29 @@
+id = "lex"
+name = "Lex"
+version = "0.1.2-rc.2"
+schema_version = 1
+description = "Lex document format support: syntax highlighting via tree-sitter, plus the lex-lsp language server (formatting, diagnostics, code actions)."
+repository = "https://github.com/lex-fmt/zed-lex"
+authors = ["Arthur Debert <debert@gmail.com>"]
+themes = []
+icon_themes = []
+languages = ["languages/lex"]
+capabilities = []
+
+[lib]
+kind = "Rust"
+version = "0.7.0"
+
+[grammars.lex]
+repository = "https://github.com/lex-fmt/tree-sitter-lex"
+rev = "7197b61d235c76919074a190ee650d0a1266dc9c"
+
+[language_servers.lex-lsp]
+language = "Lex"
+languages = []
+
+[language_servers.lex-lsp.language_ids]
+
+[context_servers]
+
+[slash_commands]
