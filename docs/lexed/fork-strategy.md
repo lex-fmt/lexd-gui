@@ -215,7 +215,7 @@ Remaining before retiring the Electron Lexed:
 
 Known upstream issues affecting Lex features:
 [tree-sitter-lex#117](https://github.com/lex-fmt/tree-sitter-lex/issues/117)
-(grammar mis-parses session/document titles in common shapes; outline is
+(grammar misparses session/document titles in common shapes; outline is
 LSP-backed as the durable mitigation, but highlighting and textobjects still
 degrade) and [zed-lex#49](https://github.com/lex-fmt/zed-lex/issues/49)
 (brackets/textobjects queries not valid for Zed).

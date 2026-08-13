@@ -1,0 +1,62 @@
+# cargo-deny configuration for Lexed. Fork-owned: upstream Zed does not run
+# cargo-deny, so nothing here needs to survive a rebase.
+
+# RustSec advisories are cargo-audit's job here, not cargo-deny's: audit reads
+# Cargo.lock directly and so sees the platform- and feature-gated crates that
+# cargo-deny's resolved graph prunes away. Keeping both would mean maintaining
+# two ignore lists for the same database. The CI job runs
+# `cargo deny check licenses bans sources`.
+
+[graph]
+all-features = true
+
+[licenses]
+version = 2
+# First-party crates in this workspace do not all carry a `license` field, and
+# their licensing is governed by the LICENSE-GPL / LICENSE-APACHE symlinks that
+# script/check-licenses enforces instead.
+private = { ignore = true }
+# The allow list mirrors the full `cargo metadata` license inventory. Feature
+# and target pruning means a given run resolves only a subset of it, and an
+# entry going unmatched is not a finding.
+unused-allowed-license = "allow"
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "GPL-2.0-only",
+    "GPL-3.0-or-later",
+    "ISC",
+    "LGPL-2.1-or-later",
+    "LGPL-3.0", # nvim-rs, which declares the deprecated bare identifier
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "NCSA",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+# Ships the Fuchsia BSD-3-Clause text without an SPDX expression in its manifest.
+[[licenses.clarify]]
+name = "fuchsia-cprng"
+expression = "BSD-3-Clause"
+license-files = []
+
+[bans]
+multiple-versions = "allow"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+# Zed pins roughly thirty dependencies to a git rev, several of them its own
+# forks. The rev pin is the integrity guarantee; enumerating the hosts here
+# would only add churn on every upstream rebase.
+unknown-git = "allow"

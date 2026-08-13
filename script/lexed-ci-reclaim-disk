@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+
+# Free disk space on a GitHub-hosted Linux runner by deleting preinstalled
+# toolchains this repo never uses. ubuntu-latest ships with roughly 25 GB free
+# on /, which a release build of this workspace exhausts; the removals below
+# buy back around 30 GB.
+
+set -euxo pipefail
+
+sudo rm -rf \
+    /usr/local/lib/android \
+    /usr/share/dotnet \
+    /usr/share/swift \
+    /usr/local/share/boost \
+    /usr/local/share/powershell \
+    /usr/local/.ghcup \
+    /opt/ghc \
+    /opt/hostedtoolcache/CodeQL \
+    /opt/hostedtoolcache/go
+
+sudo docker image prune --all --force || true
+
+df -h

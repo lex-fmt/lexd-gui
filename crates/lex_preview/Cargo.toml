@@ -22,7 +22,6 @@ multi_buffer.workspace = true
 project.workspace = true
 serde_json.workspace = true
 settings.workspace = true
-theme.workspace = true
 theme_settings.workspace = true
 ui.workspace = true
 workspace.workspace = true
