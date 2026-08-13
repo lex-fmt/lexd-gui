@@ -25,7 +25,7 @@ display names, application menu, About window, single-instance dialog.
 
 | Path | What | Fix |
 |---|---|---|
-| `assets/icons/ai_zed.svg`, `zed_agent.svg`, `zed_predict{,_up,_down,_error,_disabled}.svg` (7) | Contain the literal Zed "Z" logo path | Redraw. Five share the identical Z path string (`M7.5 8.9V11…`), so four are a single find-and-replace of one path; only `zed_predict_disabled.svg` (fill-based) and `ai_zed.svg`/`zed_agent.svg` need real art. Keep filenames — `IconName` maps enum variant → filename, so in-place content swaps need zero code changes. |
+| `assets/icons/ai_zed.svg`, `zed_agent.svg`, `zed_predict{,_up,_down,_error,_disabled}.svg` (7) | Contained the literal Zed "Z" logo path | **Done** — all seven replaced with a simplified tree glyph (trunk, forked branches, leaf dots) derived from the Lexed tree mark, drawn on the same 16×16 / stroke-1.2 grid. In-place content swaps; filenames and `IconName` mapping unchanged. `zed_predict_disabled` overlays the slash rather than slicing gaps around it — acceptable at 16 px, refine later if a designer wants. |
 | `assets/badge/v0.json` | shields.io badge with the full Z logo inline | Deleted |
 | `assets/images/zed_x_copilot.svg` | Zed wordmark × Copilot lockup | Deleted (unreferenced; `assets/icons/copilot.svg` covers the need) |
 | `"Zed (Default)"` icon theme name | `assets/settings/default.json` + `DEFAULT_ICON_THEME_NAME` in `crates/theme/src/icon_theme.rs` | Rename to "Lexed (Default)" — small code+settings change, do together with the icon redraws |
