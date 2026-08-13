@@ -386,12 +386,11 @@ fn render_list(element: &HtmlElement, rcx: &mut RenderContext, cx: &mut App) -> 
                 .items_start()
                 .gap_2()
                 .child(div().text_color(rcx.muted_color).flex_none().child(marker))
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .flex_grow(1.)
-                        .children(render_nodes(&item.children, rcx, cx)),
-                )
+                .child(v_flex().gap_1().flex_grow(1.).children(render_nodes(
+                    &item.children,
+                    rcx,
+                    cx,
+                )))
                 .into_any_element(),
         );
     }

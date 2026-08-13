@@ -37,10 +37,7 @@ struct ToolbarPreviewProviders(Vec<Rc<dyn ToolbarPreviewProvider>>);
 
 impl Global for ToolbarPreviewProviders {}
 
-pub fn register_toolbar_preview_provider(
-    provider: impl ToolbarPreviewProvider,
-    cx: &mut App,
-) {
+pub fn register_toolbar_preview_provider(provider: impl ToolbarPreviewProvider, cx: &mut App) {
     cx.default_global::<ToolbarPreviewProviders>()
         .0
         .push(Rc::new(provider));
@@ -94,7 +91,14 @@ pub fn render_toolbar_preview_button(
                         return;
                     };
                     let to_the_side = window.modifiers().alt;
-                    provider.open(workspace, active_item.as_ref(), pane, to_the_side, window, cx);
+                    provider.open(
+                        workspace,
+                        active_item.as_ref(),
+                        pane,
+                        to_the_side,
+                        window,
+                        cx,
+                    );
                 });
             }
         });
