@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+# Lexed fork guard: report and bound the number of upstream (Zed-owned) files
+# this fork has touched, per the invariant in docs/lexed/fork-strategy.md §2.
+#
+# "Touched" means modified, deleted, or renamed relative to the upstream base
+# commit recorded in ZED_BASE. Files added by the fork (status A) are free —
+# upstream has never seen them, so they can never conflict on rebase.
+#
+# Usage: script/lexed-diff-guard [ceiling]
+#   ceiling: max allowed touched-file count (default 45; also LEXED_DIFF_CEILING)
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+CEILING="${1:-${LEXED_DIFF_CEILING:-45}}"
+BASE="$(cat ZED_BASE)"
+
+if ! git cat-file -e "$BASE" 2>/dev/null; then
+    echo "error: base commit $BASE (from ZED_BASE) not found in history." >&2
+    echo "In CI, ensure the checkout has enough depth (fetch-depth: 0)." >&2
+    exit 2
+fi
+
+TOUCHED="$(git diff --name-status "$BASE" HEAD | grep -v $'^A\t' || true)"
+
+if [ -z "$TOUCHED" ]; then
+    COUNT=0
+else
+    COUNT="$(printf '%s\n' "$TOUCHED" | wc -l | tr -d ' ')"
+fi
+
+echo "Upstream files touched since ZED_BASE (${BASE:0:10}): $COUNT (ceiling: $CEILING)"
+echo
+if [ "$COUNT" -gt 0 ]; then
+    printf '%s\n' "$TOUCHED"
+    echo
+fi
+
+if [ "$COUNT" -gt "$CEILING" ]; then
+    echo "FAIL: $COUNT upstream files touched exceeds the ceiling of $CEILING." >&2
+    echo "Prefer new lex_* crates and bundled config over editing Zed-owned files" >&2
+    echo "(docs/lexed/fork-strategy.md §2). If the change is unavoidable, raise the" >&2
+    echo "ceiling deliberately in .github/workflows/lexed_diff_guard.yml." >&2
+    exit 1
+fi
+
+echo "OK: within ceiling."

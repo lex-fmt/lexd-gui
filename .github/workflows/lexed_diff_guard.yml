@@ -1,0 +1,18 @@
+name: lexed_diff_guard
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  diff_guard:
+    name: Upstream diff size guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Count upstream files touched
+        run: script/lexed-diff-guard 45
