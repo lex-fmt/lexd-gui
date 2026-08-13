@@ -1246,7 +1246,8 @@ mod windows {
 
                 // ../Zed.exe is the standard, lib/zed is for MSYS2, ./zed.exe is for the target
                 // directory in development builds.
-                let possible_locations = ["../Lexed.exe", "../lib/zed/zed-editor.exe", "./lexed.exe"];
+                let possible_locations =
+                    ["../Lexed.exe", "../lib/zed/zed-editor.exe", "./lexed.exe"];
                 possible_locations
                     .iter()
                     .find_map(|p| dir.join(p).canonicalize().ok().filter(|path| path != &cli))

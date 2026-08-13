@@ -1,0 +1,44 @@
+# Lexed's local quality gate. Setup and rationale: docs/lexed/dev-setup.md.
+#
+# Two rules this file has to keep:
+#
+# - No hook-level `piped:` or `parallel:`. If a developer's lefthook-local.yml
+#   also sets them, the merged config crashes lefthook before it runs anything.
+# - No `command -v X || exit 0` guards. A missing tool must fail the hook and
+#   name its install command, not pass quietly and let the breakage reach CI.
+#
+# The tiers are budgeted: pre-commit stays in seconds, pre-push in minutes, and
+# the unbounded whole-workspace gate belongs to CI.
+#
+# pre-commit checks staged files rather than the whole tree. That is not a
+# stylistic choice on a workspace this size: `cargo fmt --all -- --check` takes
+# roughly a minute here, and whole-tree `typos` reports 76 findings in pristine
+# upstream code that this fork must not edit. Either one whole-tree would make
+# every commit fail or crawl, which is how a gate teaches people --no-verify.
+# CI still runs both whole-tree, where the budget is unbounded.
+
+pre-commit:
+  commands:
+    fmt:
+      glob: "*.rs"
+      # rustfmt picks up the root rustfmt.toml (edition and style_edition), so
+      # this agrees with the `cargo fmt --all` that CI runs.
+      run: rustfmt --check {staged_files}
+      fail_text: "Run 'cargo fmt --all' and stage the result."
+    typos:
+      run: typos --config typos.toml {staged_files}
+      fail_text: "If 'typos' is missing: brew install typos-cli"
+    # Triggered by staged scripts but run whole-directory: the shell scripts
+    # here carry no extension, so the shebang detection that
+    # script/shellcheck-scripts already does is the only correct filter.
+    shellcheck:
+      glob: "script/*"
+      run: script/shellcheck-scripts error
+      fail_text: "If 'shellcheck' is missing: brew install shellcheck"
+
+pre-push:
+  commands:
+    clippy-changed:
+      run: script/lexed-clippy-changed
+    test-changed:
+      run: script/lexed-test-changed

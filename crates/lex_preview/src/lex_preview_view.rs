@@ -198,13 +198,14 @@ impl LexPreviewView {
                 .into_response();
 
             let content = match response {
-                Ok(Some(serde_json::Value::String(html))) => cx
-                    .background_spawn(async move {
+                Ok(Some(serde_json::Value::String(html))) => {
+                    cx.background_spawn(async move {
                         parse_html_document(&html)
                             .map(Arc::from)
                             .map_err(|error| SharedString::from(error.to_string()))
                     })
-                    .await,
+                    .await
+                }
                 Ok(_) => Err("The Lex language server returned no HTML".into()),
                 Err(error) => Err(format!("Failed to render the document: {error}").into()),
             };
@@ -233,7 +234,11 @@ impl LexPreviewView {
         })
     }
 
-    fn set_content(&mut self, content: Result<Arc<[HtmlNode]>, SharedString>, cx: &mut Context<Self>) {
+    fn set_content(
+        &mut self,
+        content: Result<Arc<[HtmlNode]>, SharedString>,
+        cx: &mut Context<Self>,
+    ) {
         self.content = Some(content);
         cx.notify();
     }
@@ -323,7 +328,8 @@ impl LexPreviewView {
                 pane.activate_item(existing_view_idx, focus, focus, window, cx);
             });
         } else {
-            let view = Self::create_lex_view(LexPreviewMode::Default, workspace, buffer, window, cx);
+            let view =
+                Self::create_lex_view(LexPreviewMode::Default, workspace, buffer, window, cx);
             pane.update(cx, |pane, cx| {
                 pane.add_item(Box::new(view), focus, focus, None, window, cx)
             });
@@ -460,8 +466,11 @@ mod tests {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
-        fs.insert_tree(path!("/root"), json!({ "doc.lex": "Title\n\nHello world.\n" }))
-            .await;
+        fs.insert_tree(
+            path!("/root"),
+            json!({ "doc.lex": "Title\n\nHello world.\n" }),
+        )
+        .await;
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
 
         let language_registry = project.read_with(cx, |project, _| project.languages().clone());
@@ -488,7 +497,12 @@ mod tests {
             cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
 
         let worktree_id = project.read_with(cx, |project, cx| {
-            project.worktrees(cx).next().expect("has worktree").read(cx).id()
+            project
+                .worktrees(cx)
+                .next()
+                .expect("has worktree")
+                .read(cx)
+                .id()
         });
         workspace
             .update_in(cx, |workspace, window, cx| {
@@ -578,14 +592,20 @@ mod tests {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
-        fs.insert_tree(path!("/root"), json!({ "doc.lex": "Title\n" })).await;
+        fs.insert_tree(path!("/root"), json!({ "doc.lex": "Title\n" }))
+            .await;
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
 
         let (workspace, cx) =
             cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
 
         let worktree_id = project.read_with(cx, |project, cx| {
-            project.worktrees(cx).next().expect("has worktree").read(cx).id()
+            project
+                .worktrees(cx)
+                .next()
+                .expect("has worktree")
+                .read(cx)
+                .id()
         });
         workspace
             .update_in(cx, |workspace, window, cx| {

@@ -173,9 +173,7 @@ mod tests {
             },
             Some(ts_language),
         )
-        .with_outline_query(
-            std::str::from_utf8(&outline_query).expect("outline query is utf-8"),
-        )
+        .with_outline_query(std::str::from_utf8(&outline_query).expect("outline query is utf-8"))
         .expect("outline query compiles against the vendored grammar");
 
         let text = "Kitchen Sink Document\n\
@@ -267,15 +265,18 @@ mod tests {
         let dev_extension_dir = temp_dir.path().join("dev-lex");
         std::fs::create_dir_all(&dev_extension_dir).expect("create dev dir");
         #[cfg(unix)]
-        std::os::unix::fs::symlink(&dev_extension_dir, installed_dir.join("lex"))
-            .expect("symlink");
+        std::os::unix::fs::symlink(&dev_extension_dir, installed_dir.join("lex")).expect("symlink");
         #[cfg(windows)]
         std::os::windows::fs::symlink_dir(&dev_extension_dir, installed_dir.join("lex"))
             .expect("symlink");
 
         install_extension(&installed_dir, "lex").expect("install");
         assert!(
-            installed_dir.join("lex").symlink_metadata().unwrap().is_symlink(),
+            installed_dir
+                .join("lex")
+                .symlink_metadata()
+                .unwrap()
+                .is_symlink(),
             "dev extension symlink must be preserved"
         );
         assert!(!installed_dir.join("lex/extension.wasm").exists());

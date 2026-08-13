@@ -68,6 +68,10 @@ from crate tests through workspace-level gpui tests to sandboxed real-app
 launches with `--user-data-dir` — are documented in the `testing-lexed` skill
 under `.claude/skills/`.
 
+Local tooling and the pre-commit/pre-push gate are described in
+[`docs/lexed/dev-setup.md`](docs/lexed/dev-setup.md); run `lefthook install`
+once per clone.
+
 ## Licensing
 
 Zed is licensed per component: `crates/gpui` under Apache-2.0, `crates/collab`
