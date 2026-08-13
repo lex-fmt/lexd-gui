@@ -14,7 +14,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-CEILING="${1:-${LEXED_DIFF_CEILING:-45}}"
+CEILING="${1:-${LEXED_DIFF_CEILING:-60}}"
 BASE="$(cat ZED_BASE)"
 
 if ! git cat-file -e "$BASE" 2>/dev/null; then

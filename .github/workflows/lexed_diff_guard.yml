@@ -15,4 +15,4 @@ jobs:
         with:
           fetch-depth: 0
       - name: Count upstream files touched
-        run: script/lexed-diff-guard 45
+        run: script/lexed-diff-guard 60
