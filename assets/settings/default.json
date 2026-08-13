@@ -2344,6 +2344,13 @@
         "plugins": ["prettier-plugin-latex"],
       },
     },
+    // Lexed: outline and breadcrumbs for Lex come from lex-lsp's
+    // documentSymbol (same source VS Code uses) rather than the
+    // tree-sitter grammar, which mis-parses session titles in common
+    // document shapes (lex-fmt/tree-sitter-lex#117).
+    "Lex": {
+      "document_symbols": "on",
+    },
     "Markdown": {
       "use_on_type_format": false,
       "remove_trailing_whitespace_on_save": false,
