@@ -36,7 +36,11 @@ impl QuickActionBar {
         {
             PreviewTarget::Csv(editor)
         } else {
-            return None;
+            return lex_preview::toolbar::render_toolbar_preview_button(
+                active_item.as_ref(),
+                self.workspace.clone(),
+                cx,
+            );
         };
 
         let (button_id, tooltip_text, open_action_for_tooltip) = match &preview_target {

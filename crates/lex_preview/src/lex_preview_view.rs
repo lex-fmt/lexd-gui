@@ -506,6 +506,18 @@ mod tests {
             .await
             .expect("open doc.lex");
 
+        // The toolbar registry (populated by crate::init) offers a preview
+        // button for the active lex editor.
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let item = workspace.active_item(cx).expect("active item");
+            let button = crate::toolbar::render_toolbar_preview_button(
+                item.as_ref(),
+                workspace.weak_handle(),
+                cx,
+            );
+            assert!(button.is_some(), "lex file should get a preview button");
+        });
+
         let fake_server = fake_servers.next().await.expect("lex-lsp starts");
         fake_server.set_request_handler::<lsp::request::ExecuteCommand, _, _>(
             |params, _| async move {
@@ -538,6 +550,18 @@ mod tests {
                 .expect("preview pane item exists")
         });
         cx.run_until_parked();
+
+        // The preview pane itself is not previewable: no button for it.
+        workspace.update_in(cx, |workspace, _window, cx| {
+            let item = workspace.active_item(cx).expect("active item");
+            let button = crate::toolbar::render_toolbar_preview_button(
+                item.as_ref(),
+                workspace.weak_handle(),
+                cx,
+            );
+            assert!(button.is_none(), "preview pane must not get a button");
+        });
+
         preview.read_with(cx, |preview, _| {
             let content = preview
                 .content
