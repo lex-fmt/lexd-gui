@@ -136,6 +136,81 @@ mod tests {
         assert!(!version.is_empty());
     }
 
+    /// Loads the vendored grammar wasm and outline query through the same
+    /// code path the app uses, and checks the outline of a nested document.
+    /// Guards against shipping a grammar/query pair that collapses the
+    /// outline view to a single item.
+    ///
+    /// The document deliberately has a single top-level session:
+    /// tree-sitter-lex mis-parses session or document titles in several
+    /// multi-session shapes (lex-fmt/tree-sitter-lex#117), which is what
+    /// breaks the outline view on real documents today. When that bug is
+    /// fixed and the pinned grammar bumped, extend this document with an
+    /// intro paragraph and a second top-level session.
+    #[gpui::test]
+    async fn vendored_grammar_produces_nested_outline(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+
+        let wasm = BundledExtensions::get("lex/grammars/lex.wasm")
+            .expect("grammar wasm is vendored")
+            .data;
+        let outline_query = BundledExtensions::get("lex/languages/lex/outline.scm")
+            .expect("outline query is vendored")
+            .data;
+
+        let ts_language = language::with_parser(|parser| {
+            let mut store = parser.take_wasm_store().expect("parser has a wasm store");
+            let result = store.load_language("lex", &wasm);
+            parser.set_wasm_store(store).expect("restore wasm store");
+            result
+        })
+        .expect("load vendored grammar wasm");
+
+        let language = language::Language::new(
+            language::LanguageConfig {
+                name: "Lex".into(),
+                ..Default::default()
+            },
+            Some(ts_language),
+        )
+        .with_outline_query(
+            std::str::from_utf8(&outline_query).expect("outline query is utf-8"),
+        )
+        .expect("outline query compiles against the vendored grammar");
+
+        let text = "Kitchen Sink Document\n\
+                    \n\
+                    Section One:\n\
+                    \n\
+                    \x20\x20\x20\x20Some content here.\n\
+                    \n\
+                    \x20\x20\x20\x20Nested Section:\n\
+                    \n\
+                    \x20\x20\x20\x20\x20\x20\x20\x20Deeper content.\n";
+
+        let buffer = cx.new(|cx| {
+            language::Buffer::local(text, cx).with_language(std::sync::Arc::new(language), cx)
+        });
+        cx.executor().run_until_parked();
+
+        let outline = buffer.read_with(cx, |buffer, _| buffer.snapshot().outline(None));
+        let items: Vec<(usize, String)> = outline
+            .items
+            .iter()
+            .map(|item| (item.depth, item.text.to_string()))
+            .collect();
+
+        assert_eq!(
+            items,
+            vec![
+                (0, "Kitchen Sink Document".to_string()),
+                (0, "Section One:".to_string()),
+                (1, "Nested Section:".to_string()),
+            ],
+            "outline should list every session, nested by containment"
+        );
+    }
+
     #[test]
     fn installs_into_empty_dir() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
