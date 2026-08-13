@@ -113,7 +113,7 @@ For a smoke test of the actual binary on macOS:
 cargo build -p zed
 SANDBOX_DIR=$(mktemp -d)
 ZED_STATELESS=1 ZED_WINDOW_SIZE=1200,800 \
-  ./target/debug/zed --user-data-dir "$SANDBOX_DIR" /path/to/file.lex &
+  ./target/debug/lexed --user-data-dir "$SANDBOX_DIR" /path/to/file.lex &
 ```
 
 - `--user-data-dir <DIR>` redirects **everything** (config, db, extensions,
@@ -128,7 +128,7 @@ ZED_STATELESS=1 ZED_WINDOW_SIZE=1200,800 \
   panic (e.g. bad default settings) happens within the first ~2s.
 - To open more files in a running instance, the `cli` binary (`cargo build -p
   cli`) does IPC open only — it cannot dispatch actions or read state.
-- `./target/debug/zed --dump-all-actions` and `--printenv` exit immediately
+- `./target/debug/lexed --dump-all-actions` and `--printenv` exit immediately
   and are useful introspection hooks.
 - Screenshot of a really-running app: `screencapture -l <window-id>` needs a
   real display + Screen Recording TCC grant — use Layer 3 instead for
@@ -140,7 +140,7 @@ ZED_STATELESS=1 ZED_WINDOW_SIZE=1200,800 \
   `BlockedHttpClient` (`crates/http_client/src/http_client.rs`) errors on any
   request — the fail-closed option.
 - For the real binary, run with an env proxy and observe:
-  `http_proxy=http://127.0.0.1:<port> https_proxy=... ./target/debug/zed ...`
+  `http_proxy=http://127.0.0.1:<port> https_proxy=... ./target/debug/lexed ...`
   — `crates/http_proxy` provides an allowlisting proxy with a
   `ProxyEvent::RequestAttempt {host, ...}` stream naming every attempted host.
   Note env proxies only catch the HTTP client; raw sockets need
