@@ -10156,6 +10156,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "lex_preview"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "editor",
+ "fs",
+ "futures 0.3.32",
+ "gpui",
+ "html5ever 0.27.0",
+ "language",
+ "lsp",
+ "markup5ever_rcdom",
+ "multi_buffer",
+ "pretty_assertions",
+ "project",
+ "serde_json",
+ "settings",
+ "theme",
+ "theme_settings",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "libbz2-rs-sys"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -23362,6 +23387,7 @@ dependencies = [
  "language_tools",
  "languages",
  "lex_bundled_extensions",
+ "lex_preview",
  "line_ending_selector",
  "log",
  "lsp_locations",

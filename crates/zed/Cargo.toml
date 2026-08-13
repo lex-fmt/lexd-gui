@@ -155,6 +155,7 @@ language_selector.workspace = true
 language_tools.workspace = true
 languages = { workspace = true, features = ["load-grammars"] }
 lex_bundled_extensions.workspace = true
+lex_preview.workspace = true
 line_ending_selector.workspace = true
 log.workspace = true
 lsp_locations.workspace = true

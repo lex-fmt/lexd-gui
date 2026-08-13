@@ -125,6 +125,7 @@ members = [
     "crates/language_tools",
     "crates/languages",
     "crates/lex_bundled_extensions",
+    "crates/lex_preview",
     "crates/line_ending_selector",
     "crates/livekit_api",
     "crates/livekit_client",
@@ -391,6 +392,7 @@ language_selector = { path = "crates/language_selector" }
 language_tools = { path = "crates/language_tools" }
 languages = { path = "crates/languages" }
 lex_bundled_extensions = { path = "crates/lex_bundled_extensions" }
+lex_preview = { path = "crates/lex_preview" }
 line_ending_selector = { path = "crates/line_ending_selector" }
 livekit_api = { path = "crates/livekit_api" }
 livekit_client = { path = "crates/livekit_client" }
