@@ -5843,6 +5843,7 @@ mod tests {
                 "keystroke_input",
                 "language_selector",
                 "welcome",
+                "lex",
                 "line_ending_selector",
                 "lsp_tool",
                 "markdown",
