@@ -200,9 +200,10 @@ The artifacts do not transfer either, which is the same fact from the other
 side. Pointing a fully warm full-workspace target at the closure recompiled 47
 workspace crates and ran over 12 minutes before listing a single test; going
 back cost 7 crates and 62 s, because the target directory then holds both
-feature resolutions side by side. So the closure build is a rebuild against
-whatever `main` cached, once per distinct closure, on the one job that already
-runs `script/lexed-ci-reclaim-disk` to fit 75 GB on a stock runner.
+feature resolutions side by side — 71 GB became 93 GB. So the closure build is
+a rebuild against whatever `main` cached, once per distinct closure, and it
+grows the directory on the one job that already runs
+`script/lexed-ci-reclaim-disk` to fit 75 GB on a stock runner.
 
 Cargo offers no way out. `--features paths/test-support` is rejected outright
 for a package outside the `-p` selection ("none of the selected packages
