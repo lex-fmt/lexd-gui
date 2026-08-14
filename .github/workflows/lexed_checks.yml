@@ -90,7 +90,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
-          key: clippy-gen2
+          key: clippy
 
       # Complements rust-cache rather than replacing it: rust-cache restores
       # this branch's whole target directory from the 10 GB branch-scoped
@@ -163,7 +163,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
-          key: tests-gen2
+          key: tests
 
       - name: Enable sccache (GCS)
         uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
