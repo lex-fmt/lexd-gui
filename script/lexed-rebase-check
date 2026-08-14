@@ -9,8 +9,10 @@
 # the branch and working tree the caller sits on are never touched.
 #
 # Usage: script/lexed-rebase-check [--semantic] [target]
-#   target:     commit-ish to rebase onto (default: FETCH_HEAD, i.e. whatever
-#               the caller last fetched from upstream).
+#   target:     commit-ish to rebase onto. Given explicitly it is trusted as
+#               given. Omitted, it defaults to FETCH_HEAD and is refused if it
+#               turns out to be an ancestor of origin/main, which means some
+#               other fetch clobbered it and it is not upstream Zed.
 #   --semantic: after a clean replay, also run `cargo check --workspace` on the
 #               rebased tree. A textually clean rebase can still be broken —
 #               upstream renaming an API the fork calls conflicts with nothing.
@@ -55,7 +57,12 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-TARGET_REF="${TARGET_REF:-FETCH_HEAD}"
+TARGET_EXPLICIT=1
+if [ -z "$TARGET_REF" ]; then
+    TARGET_REF="FETCH_HEAD"
+    TARGET_EXPLICIT=0
+fi
+
 BASE="$(cat ZED_BASE)"
 
 if ! git cat-file -e "$BASE" 2>/dev/null; then
@@ -67,6 +74,22 @@ fi
 if ! TARGET="$(git rev-parse --verify --quiet "${TARGET_REF}^{commit}")"; then
     echo "error: target '$TARGET_REF' does not resolve to a commit." >&2
     echo "Fetch upstream first, e.g. git fetch https://github.com/zed-industries/zed main" >&2
+    exit 2
+fi
+
+# FETCH_HEAD is whatever the last fetch of ANY remote left behind, and this
+# repo's pre-push hooks fetch origin — so the default silently degrades into
+# "rebase the fork onto its own main", which produces a pile of meaningless
+# conflicts. Upstream Zed is never an ancestor of our main, so that test
+# separates a stale default from a real one. Only the default is second-guessed;
+# an explicit target is taken as given, which keeps the documented self-test
+# against ZED_BASE (an ancestor by construction) working.
+if [ "$TARGET_EXPLICIT" = "0" ] && git rev-parse --verify --quiet origin/main >/dev/null &&
+    git merge-base --is-ancestor "$TARGET" origin/main; then
+    echo "error: FETCH_HEAD (${TARGET:0:10}) is an ancestor of origin/main, so it is not" >&2
+    echo "upstream Zed — some other fetch has overwritten it since. Fetch upstream:" >&2
+    echo "    git fetch https://github.com/zed-industries/zed main" >&2
+    echo "Or pass a target explicitly, which is trusted as given." >&2
     exit 2
 fi
 

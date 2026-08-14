@@ -261,6 +261,15 @@ only when the environment has none — so a developer running it never has their
 branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 textual
 conflict, 2 misconfiguration (matching `lexed-diff-guard`), 3 semantic drift.
 
+The `FETCH_HEAD` default has one trap worth guarding: it holds whatever the last
+fetch of _any_ remote left behind, and the pre-push hooks fetch `origin`, so a
+local run can silently end up rebasing the fork onto its own `main`. The script
+refuses a **defaulted** `FETCH_HEAD` that is an ancestor of `origin/main`,
+since upstream Zed never is. An explicitly passed target is trusted as given —
+otherwise the documented `"$(cat ZED_BASE)"` self-test, an ancestor by
+construction, would be refused too. CI is unaffected either way: it fetches
+upstream in the step immediately before.
+
 ### Semantic drift
 
 A textually clean rebase can still be a broken tree. Git reports a conflict

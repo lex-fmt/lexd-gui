@@ -85,10 +85,13 @@ script/lexed-rebase-check FETCH_HEAD
 ```
 
 Run those two together. `FETCH_HEAD` is whatever the last fetch of _any_ remote
-left behind, and the pre-push hooks fetch `origin` — so a stale `FETCH_HEAD`
-will happily rebase the fork onto the fork's own `main` and report a pile of
-meaningless conflicts. The script prints the target commit's sha, date, and
-subject before it starts; if that line does not look like upstream Zed, refetch.
+left behind, and the pre-push hooks fetch `origin`, so it goes stale easily. The
+script refuses a defaulted `FETCH_HEAD` that turns out to be an ancestor of
+`origin/main` — upstream Zed never is — rather than rebasing the fork onto its
+own `main` and reporting a pile of meaningless conflicts. It also prints the
+target commit's sha, date, and subject before starting, so you can see what you
+got. A target you pass explicitly is trusted as given and skips the check, which
+is what keeps the `"$(cat ZED_BASE)"` self-test above working.
 
 The replay happens in a throwaway detached worktree, so your branch, working
 tree, and git config are untouched either way. Exit 1 means conflict, and the
