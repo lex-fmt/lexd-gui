@@ -151,6 +151,18 @@ rendered" under `#[cfg(not(...))]`; `gpui_wgpu`'s `find_best_match` degrades to
 a naive font match the same way. The tests would still compile and still pass,
 against a different text system than the one `main` tests.
 
+Two commands show it:
+
+```console
+$ cargo tree -e features --prefix none --format '{p}|{f}' -p gpui | grep '^gpui v' | sort -u
+gpui v0.2.2|default,font-kit,wayland,windows-manifest,x11
+$ cargo tree -e features --prefix none --format '{p}|{f}' -p zed | grep '^gpui v' | sort -u
+gpui v0.2.2|backtrace,...,test-support,wayland,x11
+gpui v0.2.2|...,screen-capture
+```
+
+Neither `-p zed` line carries `default` or `font-kit`; both `-p gpui` lines do.
+
 The same mechanism drops `test-support` from crates outside the closure, and
 `test-support` is a behaviour switch rather than extra API: gpui selects its
 deterministic test scheduler under `#[cfg(any(test, feature = "test-support"))]`
