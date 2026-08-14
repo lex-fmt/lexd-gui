@@ -31,6 +31,13 @@ trap 'rm -rf "$work"' EXIT
 metadata="$(cargo metadata --format-version=1 --no-deps)"
 members="$(echo "$metadata" | jq -r '.packages[].name')"
 
+for package in "$@"; do
+    grep -qxF "$package" <<<"$members" || {
+        echo "$package is not a workspace member" >&2
+        exit 2
+    }
+done
+
 # One "dependency<TAB>dependent" line per edge between two workspace members,
 # across every dependency kind: a crate's tests are built from its dev
 # dependencies too. Edges are matched by package name alone, so a registry
