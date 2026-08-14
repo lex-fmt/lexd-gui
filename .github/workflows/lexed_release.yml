@@ -115,8 +115,11 @@ jobs:
             range="${previous}..${TAG}"
             heading="Changes since ${previous}:"
           else
-            range="$TAG"
-            heading="Changes:"
+            # No earlier release to diff against. The fork's own history is the
+            # honest answer, and it is the only bounded one — a bare "$TAG"
+            # range would list every commit Zed has ever made.
+            range="$(cat ZED_BASE)..${TAG}"
+            heading="Lexed changes since the upstream Zed base:"
           fi
           {
             echo "$heading"
