@@ -123,7 +123,9 @@ check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
 
 `--workspace` compiles and links every test binary in the workspace whether or
 not the filterset will run it: ~75 GB of target directory and 18-33 minutes,
-against the ~37 seconds of execution the filterset actually saves. The obvious
+against the ~37 seconds of execution the filterset actually saves. A pull
+request touching no crates still spent 22 min 38 s in the tests job to run the
+90 tests its filterset selected, out of 8141. The obvious
 fix is to drop `--workspace -E ...` for `-p <reverse-dependency closure of the
 changed crates>` so that cargo builds only what the closure needs. That was
 built and measured, and it must not be adopted. `script/lexed-test-scope-probe`
@@ -185,6 +187,22 @@ workspace members across all dependency kinds, and it matches
 `cargo tree --workspace --invert <crate> --edges normal,build,dev` exactly for
 every row. Note the shape of the table: the smaller the closure, the larger the
 divergence, so the cheapest pull requests would be the least faithful ones.
+
+And the two invocations list the _same tests_. For a branch touching only the
+`lex_*` crates, `--workspace -E 'rdeps(lex_preview)|rdeps(lex_bundled_extensions)'`
+and `-p lex_preview -p lex_bundled_extensions -p zed` produce byte-identical
+lists of the same 90 test IDs — one from 264 test binaries, the other from 3.
+That identity is the hazard rather than the reassurance: no counts change, no
+summary changes, and nothing a reviewer could read would reveal that the code
+under those 90 tests had.
+
+The artifacts do not transfer either, which is the same fact from the other
+side. Pointing a fully warm full-workspace target at the closure recompiled 47
+workspace crates and ran over 12 minutes before listing a single test; going
+back cost 7 crates and 62 s, because the target directory then holds both
+feature resolutions side by side. So the closure build is a rebuild against
+whatever `main` cached, once per distinct closure, on the one job that already
+runs `script/lexed-ci-reclaim-disk` to fit 75 GB on a stock runner.
 
 Cargo offers no way out. `--features paths/test-support` is rejected outright
 for a package outside the `-p` selection ("none of the selected packages
