@@ -141,10 +141,21 @@ jobs:
     name: Build (${{ matrix.arch }})
     needs: prepare
     runs-on: macos-latest
-    # Sized for a cold run. A hosted macOS runner has a fraction of the cores a
-    # developer machine does, and the release profile shares no cached
-    # compilation units with the dev-profile jobs in lexed_checks.yml.
-    timeout-minutes: 180
+    # Sized for a cold run, and generously. A hosted macOS runner has a fraction
+    # of the cores a developer machine does, the release profile shares no
+    # cached compilation units with the dev-profile jobs in lexed_checks.yml,
+    # and bundle-mac makes three cargo passes (zed + cli, then remote_server
+    # under different feature unification, then cargo bundle). The first
+    # measured run was still in the first pass at the two-hour mark.
+    timeout-minutes: 240
+    env:
+      # sccache's server exits after 600 idle seconds by default. This build
+      # goes far longer than that between compile requests — one gap between
+      # two crates measured 44 minutes on a hosted runner — so the server dies
+      # mid-build and restarts, losing its statistics and doing the handshake
+      # work again. The checks workflow never hits this because its jobs are
+      # short and densely parallel.
+      SCCACHE_IDLE_TIMEOUT: "0"
     strategy:
       fail-fast: false
       matrix:
