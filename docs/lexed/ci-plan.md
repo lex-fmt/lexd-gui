@@ -224,10 +224,16 @@ churn), map from Doppler keys in one place. New `script/lexed-secrets-sync`
 
 ## 5. Scheduled rebase canary: `lexed_rebase_check.yml`
 
-Weekly cron + `workflow_dispatch`. Read-only, never pushes:
+Weekly cron (Mondays, 05:17 UTC) + `workflow_dispatch`. Read-only, never
+pushes:
 
-1. Checkout with full history; `git fetch https://github.com/zed-industries/zed
-main` (and tags).
+1. Checkout with `fetch-depth: 0`; `git fetch
+https://github.com/zed-industries/zed main`. Full history is not optional —
+   the replay needs every commit back to `ZED_BASE`, and `ZED_BASE` is an
+   upstream commit, so the fork's history reaches into Zed's. That is also
+   what makes the upstream fetch near-free: only the commits upstream added
+   since the pin are missing. No explicit tag fetch — the canary targets
+   `main`, and tag-following already brings along anything reachable.
 2. Attempt `git rebase --onto <target> $(cat ZED_BASE)` on a throwaway
    worktree, where `<target>` is upstream `main` for the weekly canary
    (fork-strategy's actual rebase cadence is quarterly onto stable tags; the
@@ -238,6 +244,19 @@ main` (and tags).
    signal that spawns an agent session while the conflict is still small.
 4. `permissions: contents: read`; no issue creation, no notifications
    machinery — the failed-run email/badge is enough to start with.
+
+**All of the logic lives in `script/lexed-rebase-check`, not the workflow.** A
+`schedule` trigger only fires from the default branch, so the cron itself is
+unverifiable until after merge; keeping the workflow to three steps (checkout,
+fetch, run script) means the part that can be wrong is the part that runs
+locally. The script takes an optional target (default `FETCH_HEAD`), so
+`script/lexed-rebase-check "$(cat ZED_BASE)"` is a trivially clean self-test
+and any fetched ref exercises the real path. It replays inside a detached
+`git worktree` under `mktemp -d`, aborts the rebase and removes the worktree
+from an `EXIT` trap, and falls back to a `github-actions[bot]` committer ident
+only when the environment has none — so a developer running it never has their
+branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 conflict,
+2 misconfiguration (matching `lexed-diff-guard`).
 
 ## Sequencing
 

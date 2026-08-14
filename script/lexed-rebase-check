@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+
+# Lexed rebase canary: rehearse `git rebase --onto <target> $(cat ZED_BASE)`
+# and report whether the fork's commits still replay cleanly onto upstream.
+#
+# This is early conflict radar, not the rebase itself — the real cadence is
+# quarterly onto upstream stable tags (docs/lexed/fork-strategy.md §6). Nothing
+# here is destructive: the replay happens in a throwaway detached worktree, so
+# the branch and working tree the caller sits on are never touched.
+#
+# Usage: script/lexed-rebase-check [target]
+#   target: commit-ish to rebase onto (default: FETCH_HEAD, i.e. whatever the
+#           caller last fetched from upstream).
+#
+# Exit codes: 0 clean, 1 conflict, 2 misconfiguration.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+TARGET_REF="${1:-FETCH_HEAD}"
+BASE="$(cat ZED_BASE)"
+
+if ! git cat-file -e "$BASE" 2>/dev/null; then
+    echo "error: base commit $BASE (from ZED_BASE) not found in history." >&2
+    echo "In CI, ensure the checkout has enough depth (fetch-depth: 0)." >&2
+    exit 2
+fi
+
+if ! TARGET="$(git rev-parse --verify --quiet "${TARGET_REF}^{commit}")"; then
+    echo "error: target '$TARGET_REF' does not resolve to a commit." >&2
+    echo "Fetch upstream first, e.g. git fetch https://github.com/zed-industries/zed main" >&2
+    exit 2
+fi
+
+# Replaying commits mints new committer idents. Fall back to the CI bot only
+# when the environment has no identity of its own — never overwrite a
+# developer's. Env vars rather than `git config`, because a linked worktree
+# shares the main repo's config file.
+if ! git config --get user.email >/dev/null 2>&1; then
+    export GIT_AUTHOR_NAME="github-actions[bot]"
+    export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+    export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+    export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+fi
+
+COMMITS="$(git rev-list --count "$BASE..HEAD")"
+WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/lexed-rebase-check.XXXXXX")"
+REBASE_LOG="$(mktemp "${TMPDIR:-/tmp}/lexed-rebase-check-log.XXXXXX")"
+
+cleanup() {
+    git -C "$WORKTREE" rebase --abort >/dev/null 2>&1 || true
+    git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+    rm -rf "$WORKTREE" "$REBASE_LOG"
+    git worktree prune >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "Rebasing $COMMITS commit(s) since ZED_BASE (${BASE:0:10}) onto ${TARGET:0:10}"
+
+# --detach so no branch is created, and none can be left behind on failure.
+git worktree add --quiet --detach "$WORKTREE" HEAD
+
+# Always drains stdin, so a caller can pipe into it unconditionally without
+# the producer taking SIGPIPE when the workflow summary is absent.
+summary() {
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        cat >>"$GITHUB_STEP_SUMMARY"
+    else
+        cat >/dev/null
+    fi
+}
+
+if git -C "$WORKTREE" rebase --onto "$TARGET" "$BASE" >"$REBASE_LOG" 2>&1; then
+    result="rebases cleanly onto $TARGET ($COMMITS commits replayed)"
+    echo "$result"
+    summary <<EOF
+## Rebase canary
+
+OK: $result
+EOF
+    exit 0
+fi
+
+CONFLICTS="$(git -C "$WORKTREE" diff --name-only --diff-filter=U || true)"
+if [ -z "$CONFLICTS" ]; then
+    # Rebase failed without leaving unmerged paths — the log is the only clue.
+    echo "error: rebase onto $TARGET failed without reporting conflicting files." >&2
+    cat "$REBASE_LOG" >&2
+    exit 1
+fi
+
+echo "CONFLICT: rebase onto $TARGET stopped. Conflicting files:"
+printf '%s\n' "$CONFLICTS"
+
+{
+    echo "## Rebase canary"
+    echo
+    echo "CONFLICT: $COMMITS commits since ZED_BASE (\`${BASE:0:10}\`) do not replay"
+    echo "cleanly onto \`$TARGET\`."
+    echo
+    echo "Conflicting files:"
+    echo
+    printf '%s\n' "$CONFLICTS" | while read -r file; do
+        printf -- '- `%s`\n' "$file"
+    done
+} | summary
+
+exit 1

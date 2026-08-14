@@ -70,6 +70,24 @@ Pre-push runs are scoped to what you actually changed:
 
 Each takes `--list` to print what it detected without running anything.
 
+## Rebase canary
+
+A weekly workflow (`lexed_rebase_check.yml`) rehearses
+`git rebase --onto <upstream main> $(cat ZED_BASE)` and goes red when the fork
+stops replaying cleanly. It is early conflict radar, not the rebase itself —
+that stays quarterly and onto upstream stable tags (fork-strategy §6).
+
+Run the same check locally against any ref:
+
+```sh
+git fetch https://github.com/zed-industries/zed main
+script/lexed-rebase-check FETCH_HEAD
+```
+
+The replay happens in a throwaway detached worktree, so your branch, working
+tree, and git config are untouched either way. Exit 1 means conflict, and the
+conflicting files are printed.
+
 ## Agent sessions
 
 `.claude/settings.json` and `.codex/hooks.json` each register a `SessionStart`
