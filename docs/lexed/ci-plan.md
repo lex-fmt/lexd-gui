@@ -145,10 +145,11 @@ gpui = { path = "crates/gpui", default-features = false }
 
 So `gpui` loses `font-kit` — along with `default`, `inspector` and
 `windows-manifest` — in every closure that does not itself contain `gpui`,
-which is all four measured below. The feature is not cosmetic. `crates/gpui_macos/src/platform.rs` selects the real `MacTextSystem`
-under `#[cfg(feature = "font-kit")]` and a stub that logs "no text will be
-rendered" under `#[cfg(not(...))]`; `gpui_wgpu`'s `find_best_match` degrades to
-a naive font match the same way. The tests would still compile and still pass,
+which is all four measured below. The feature is not cosmetic:
+`crates/gpui_macos/src/platform.rs` selects the real `MacTextSystem` under
+`#[cfg(feature = "font-kit")]` and a stub that logs "no text will be rendered"
+under `#[cfg(not(...))]`, and `gpui_wgpu`'s `find_best_match` degrades to a
+naive font match the same way. The tests would still compile and still pass,
 against a different text system than the one `main` tests.
 
 Two commands show it:
@@ -178,6 +179,12 @@ Measured divergence between the two builds, by the crate a pull request changes:
 | `markdown_preview` | 9 of 252   | 23                              | 55          |
 | `release_channel`  | 144 of 252 | 6                               | 29          |
 | `paths`            | 145 of 252 | 6                               | 29          |
+
+The closure itself is not in doubt — it is the reverse-dependency closure over
+workspace members across all dependency kinds, and it matches
+`cargo tree --workspace --invert <crate> --edges normal,build,dev` exactly for
+every row. Note the shape of the table: the smaller the closure, the larger the
+divergence, so the cheapest pull requests would be the least faithful ones.
 
 Cargo offers no way out. `--features paths/test-support` is rejected outright
 for a package outside the `-p` selection ("none of the selected packages
