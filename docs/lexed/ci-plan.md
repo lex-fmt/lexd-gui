@@ -128,7 +128,17 @@ Namespace caching, sccache (R2 bucket is Zed's; `Swatinem/rust-cache` instead).
 ## 3. Release pipeline: `lexed_release.yml`
 
 Triggers: tag push `v*`, plus `workflow_dispatch` with a `tag` input so a run
-can be retried against an existing tag without re-cutting it. Chained jobs with
+can be retried against an existing tag without re-cutting it.
+
+Worth knowing before debugging a release: **a tag-push run executes the
+workflow file as it exists at the tag's commit**, not at the branch head. A fix
+pushed to the branch does not reach a run already triggered, and does not reach
+a re-run of it either — the tag has to be moved or re-cut. `workflow_dispatch`
+has the same property, since it also checks the workflow out of the ref it runs
+on. This is what makes the workflow testable from a branch before merge, and
+also what makes a stale tag quietly re-run old logic.
+
+Chained jobs with
 an explicit artifact contract — shipit's one genuinely good workflow idea —
 instead of one monolithic job:
 
@@ -163,6 +173,27 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   `.app` tar'd** (`Lexed-<arch>.unsigned-app.tar.gz`). The tar is mandatory:
   `actions/upload-artifact` destroys symlinks and exec bits inside a `.app`
   (shipit scar). Also emit `zed-remote-server-macos-<arch>.gz`.
+
+  Two things this job needs that no other job does, both measured the hard way
+  on the first tracer run:
+
+  - **`SCCACHE_IDLE_TIMEOUT: "0"`.** sccache's server exits after 600 idle
+    seconds. This build goes far longer than that between compile requests —
+    one gap between two consecutive `Compiling` lines measured 44 minutes on a
+    hosted runner, because the late crates are enormous and the runner has few
+    cores — so the server kept dying and restarting. The symptom is silent and
+    misleading: the job compiled 1494 crates and its final
+    `sccache --show-stats` reported **2 compile requests**, because the server
+    answering that query was a late restart. For comparison, a `lexed_checks`
+    job reports 600-plus. Any long job whose compilations are sparse in time
+    will hit this; short densely-parallel ones never will.
+  - **A generous `timeout-minutes` (240).** The first run was killed at 120
+    minutes while still inside `bundle-mac`'s _first_ cargo pass of three
+    (`zed` + `cli`, then `remote_server` under different feature unification,
+    then `cargo bundle`). Note that a job killed by `timeout-minutes` is
+    reported with conclusion **`cancelled`**, not `failure` — it reads at a
+    glance as though a human stopped it.
+
 - **sign** (macos-latest, matrix over the same arches): download
   `bundle-<arch>`, fetch the Apple credentials from Doppler (§4), untar the
   `.app`, then re-sign properly and reseal. All of it lives in
