@@ -135,6 +135,24 @@ jobs:
     name: Tests (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # collab's `test_both_dbs!` generates a `_postgres` twin of every `_sqlite`
+    # database test and skips it in CI only when the host is not Linux, on the
+    # stated assumption that Linux CI provides this service. Zed's own CI
+    # attaches the same one. The tests connect to
+    # `postgres://postgres@localhost/zed-test-<random>` and create the database
+    # themselves, so trust auth is the whole configuration.
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -173,6 +191,13 @@ jobs:
       - name: Install Linux dependencies
         run: ./script/linux
 
+      # gpui_wgpu's atlas tests ask wgpu for any adapter across all backends and
+      # a stock runner has none: "vulkan drivers/libraries could not be loaded".
+      # Lavapipe is a software Vulkan device, which is enough for these tests —
+      # they allocate and free atlas tiles rather than measure rendering.
+      - name: Install a software Vulkan driver
+        run: sudo apt-get install -y mesa-vulkan-drivers
+
       - name: Download WASI SDK
         run: ./script/download-wasi-sdk
 
@@ -208,14 +233,32 @@ jobs:
       - name: Limit target directory size
         run: ./script/clear-target-dir-if-larger-than 350 200
 
+      # `.config/nextest.toml` is upstream-owned, so exclusions live here. Every
+      # entry is one test, named exactly, with the reason it cannot pass — and
+      # each one is coverage this fork is knowingly giving up. Excluding on both
+      # paths rather than only the main-push one: a pull request that touches
+      # `settings` or `auto_update` reaches these same tests through `rdeps()`.
       - name: cargo nextest
         env:
           FILTERSET: ${{ steps.scope.outputs.filterset }}
         run: |
+          exclusions=(
+            # `assets/settings/default.json` sets `auto_update` to false for
+            # this fork; the test asserts the upstream default of true.
+            'package(auto_update) and test(=tests::test_auto_update_defaults_to_true)'
+            # Same default. Polling is gated on the setting, so the updater
+            # never leaves Idle and the test's wait loop runs to the 60s timeout.
+            'package(auto_update) and test(=tests::test_auto_update_downloads)'
+            # Same default, asserted through the settings store instead.
+            'package(settings) and test(=settings_store::tests::test_settings_store_basic)'
+          )
+          excluded="$(printf '%s or ' "${exclusions[@]}")"
+          excluded="not (${excluded% or })"
+          echo "excluding: ${excluded}"
           if [ -n "$FILTERSET" ]; then
-            cargo nextest run --workspace --no-fail-fast --no-tests=warn -E "$FILTERSET"
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn -E "($FILTERSET) and ${excluded}"
           else
-            cargo nextest run --workspace --no-fail-fast --no-tests=warn
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn -E "${excluded}"
           fi
 
       - name: sccache stats
