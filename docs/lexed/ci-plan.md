@@ -127,8 +127,10 @@ Namespace caching, sccache (R2 bucket is Zed's; `Swatinem/rust-cache` instead).
 
 ## 3. Release pipeline: `lexed_release.yml`
 
-Trigger: tag push `v*`. Chained jobs with an explicit artifact contract —
-shipit's one genuinely good workflow idea — instead of one monolithic job:
+Triggers: tag push `v*`, plus `workflow_dispatch` with a `tag` input so a run
+can be retried against an existing tag without re-cutting it. Chained jobs with
+an explicit artifact contract — shipit's one genuinely good workflow idea —
+instead of one monolithic job:
 
 ```
 prepare ──▶ build (matrix) ──▶ sign ──▶ publish
@@ -139,10 +141,21 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
 
 - **prepare** (ubuntu): validate tag shape (`v<semver>`, version =
   `${TAG#v}` — the tag is the version authority, nothing inferred), assemble
-  release notes, upload `release-notes` artifact. Zed's
+  release notes from `git log` since the previous `v*` tag, upload
+  `release-notes` artifact. It also resolves once whether signing credentials
+  exist and publishes that as an output: the `secrets` context is unreadable
+  from a job-level `if`, and without the output a credential-less run (a fork)
+  would fail inside `codesign` instead of saying why. Zed's
   `script/determine-release-channel` rejects the current `dev` channel; we do
-  not use it — decide our own channel story (simplest: build the `dev` bundle
-  identity until we deliberately adopt preview/stable channels).
+  not use it. **Channel decision: releases build as `stable`** via
+  `ZED_RELEASE_CHANNEL=stable` in the build job. `crates/zed/RELEASE_CHANNEL`
+  is upstream-owned and stays at `dev` for local builds; `bundle-mac` already
+  exported the variable, so letting the environment win is a one-line change in
+  a file the fork has already touched, and `release_channel`'s build script
+  bakes the value into the binary rather than reading the file. The bundle that
+  results is "Lexed" / `ing.lex.Lexed` / `app-icon.png`. Stable does not open a
+  network surface: auto-update polling is additionally gated on the
+  `auto_update` setting, which the bundled defaults set to `false`.
 - **build** (macos-latest, matrix `aarch64-apple-darwin` / `x86_64-apple-darwin`
   — x86_64 cross-compiles fine on arm64 runners): run `script/bundle-mac
 <triple>` **without signing secrets**, which takes its existing unsigned
@@ -151,7 +164,9 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   `actions/upload-artifact` destroys symlinks and exec bits inside a `.app`
   (shipit scar). Also emit `zed-remote-server-macos-<arch>.gz`.
 - **sign** (macos-latest, matrix over the same arches): download
-  `bundle-<arch>`, untar the `.app`, then re-sign properly and reseal:
+  `bundle-<arch>`, fetch the Apple credentials from Doppler (§4), untar the
+  `.app`, then re-sign properly and reseal. All of it lives in
+  `script/lexed-sign-mac`, extracted from `bundle-mac` as recommended:
   1. Temp keychain with a minted random password, unique per invocation
      (pid + random suffix — fixed paths collide when two passes share a job);
      import the p12, `set-key-partition-list`, **splice into `list-keychains`**
@@ -166,12 +181,15 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   3. **Reseal the DMG from the signed `.app`** (`hdiutil create -format UDZO`
      with an `/Applications` symlink) — re-bundling would strip the signature.
      Sign the DMG.
-  4. Notarize: `notarytool submit --no-wait` + a 30 s poll loop (a flaky poll
-     is not a verdict; only Accepted/Invalid/Rejected terminate), fetch
-     `notarytool log` into the error on rejection, `stapler staple`
-     (staple failure non-fatal). `--wait` also works and is what `bundle-mac`
-     does today; submit/poll is the upgrade when we extract the script.
-  5. Upload `signed-<arch>`.
+  4. Notarize with `notarytool submit --wait --timeout 30m`, preferring the
+     App Store Connect key and falling back to Apple-ID credentials (§4). The
+     verdict is read out of the JSON rather than inferred from the exit code,
+     and a non-`Accepted` verdict pulls `notarytool log` into the failure
+     output. Then `stapler staple` (a staple failure costs an online Gatekeeper
+     check on first launch, not a rejection, so it warns rather than fails) and
+     a `spctl --assess --type install` gate.
+  5. The remote-server binary is signed here too, so nothing unsigned is ever
+     published. Upload `signed-<arch>`.
 - **publish** (ubuntu): download `release-notes` + all `signed-*`, then
   idempotently: `gh release create --verify-tag --notes-file …` if absent else
   `gh release edit`; `gh release upload --clobber` for the DMGs and
@@ -180,13 +198,24 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   corresponding-source publication a launch blocker, and it costs one step
   here.
 
-**`script/bundle-mac` edits required** (file already fork-touched — no ceiling
-cost): parameterize the three hardcoded Zed identities —
-`IDENTITY="Zed Industries, Inc."`, `APPLE_NOTARIZATION_TEAM="MQ55VZLNZQ"`, and
-the `crates/zed/contents/<channel>/embedded.provisionprofile` copy (those are
-Zed's profiles; drop the copy unless/until we have Lexed profiles) — as env
-vars with Lexed defaults. Also neutralize the Sentry slugs (`-p zed -o
-zed-dev`) or leave gated on `SENTRY_AUTH_TOKEN` being unset.
+**`script/bundle-mac` edits** (file already fork-touched — no ceiling cost),
+all landed with phase 4:
+
+- `IDENTITY` comes from `APPLE_SIGNING_IDENTITY` with no default. A hardcoded
+  default is a build that signs as somebody else, or one that fails deep inside
+  `codesign` rather than at the top of the script.
+- `APPLE_NOTARIZATION_TEAM="MQ55VZLNZQ"` was dead — nothing read it — and is
+  gone rather than parameterized.
+- The `crates/zed/contents/<channel>/embedded.provisionprofile` copy is now
+  gated on `LEXED_PROVISION_PROFILE` pointing at one. Those profiles are Zed's
+  and must never ship inside a Lexed build. Lexed needs none of its own:
+  `crates/zed/resources/zed.entitlements` carries no restricted entitlement
+  (the fork's rebrand already dropped `associated-domains`), so Developer ID
+  signing validates without a profile.
+- `channel` honors `ZED_RELEASE_CHANNEL` before falling back to the file.
+
+The Sentry slugs (`-p zed -o zed-dev`) are left alone: `upload_debug_symbols`
+already no-ops without `SENTRY_AUTH_TOKEN`, which CI never sets.
 
 **Deferred, deliberately**: Linux/Windows packaging (`bundle-linux` is
 fork-touched, `bundle-windows.ps1` still ships `dev.zed.Zed*` identities —
@@ -197,51 +226,74 @@ auto-updater endpoints; nightly channel.
 
 ## 4. Secrets: Doppler → GitHub
 
-Keep `bundle-mac`'s existing env names as the GitHub secret names (no script
-churn), map from Doppler keys in one place. `script/lexed-secrets-sync` holds
-that map and pushes the values; the table in the script is the source of truth
-and this one mirrors it. Doppler project `github`, config `prd`:
+**The Apple signing material is fetched at run time, not pre-synced.** GitHub
+holds exactly two secrets of its own; everything else the sign job needs it
+reads from Doppler as it runs, through a token that can reach nothing else.
 
-| GitHub secret                 | Doppler key                    | Contents                                       |
-| ----------------------------- | ------------------------------ | ---------------------------------------------- |
-| `MACOS_CERTIFICATE`           | `APPLE_CERTIFICATE_P12_BASE64` | base64 Developer ID Application `.p12`         |
-| `MACOS_CERTIFICATE_PASSWORD`  | `APPLE_CERTIFICATE_PASSWORD`   | passphrase for that `.p12`                     |
-| `APPLE_NOTARIZATION_APPLE_ID` | `APPLE_ID`                     | Apple ID e-mail `notarytool` submits as        |
-| `APPLE_NOTARIZATION_PASSWORD` | `APPLE_APP_SPECIFIC_PASSWORD`  | app-specific password (`xxxx-xxxx-xxxx-xxxx`)  |
-| `APPLE_NOTARIZATION_TEAM_ID`  | `APPLE_TEAM_ID`                | 10-char Apple team id                          |
-| `SCCACHE_GCS_KEY`             | `SCCACHE_GCS_KEY`              | GCS service-account JSON for the sccache layer |
+`script/lexed-secrets-sync` still owns the push, shrunk to what GitHub has to
+hold itself. Doppler project `github`, config `prd`:
 
-- Resolves each via `doppler secrets get <KEY> --plain --project <p> --config
-<c>` (ambient `doppler login`, no token handling), pushes via
-  `gh secret set NAME --repo lex-fmt/lexd-gui` **with the value on stdin,
-  never argv**. `--dry-run` prints names only. One-line-per-secret output,
-  `N set / N failed` summary, exit 1 on any failure. `--plain` appends a
-  trailing newline that the script strips — a team id or app-specific password
-  pushed with it attached fails every comparison downstream.
+| GitHub secret     | Doppler key              | Contents                                        |
+| ----------------- | ------------------------ | ----------------------------------------------- |
+| `DOPPLER_TOKEN`   | `LEXD_GUI_DOPPLER_TOKEN` | read-only service token for `lexd-gui-ci`/`prd` |
+| `SCCACHE_GCS_KEY` | `SCCACHE_GCS_KEY`        | GCS service-account JSON for the sccache layer  |
+
+The token's config, Doppler project `lexd-gui-ci` config `prd`, holds nine
+secrets and nothing else. Each is a **cross-project secret reference** of the
+form `${github.prd.KEY}`, so there is one copy of every value and no drift:
+
+| CI-facing name                  | References                                |
+| ------------------------------- | ----------------------------------------- |
+| `MACOS_CERTIFICATE`             | `github.prd.APPLE_CERTIFICATE_P12_BASE64` |
+| `MACOS_CERTIFICATE_PASSWORD`    | `github.prd.APPLE_CERTIFICATE_PASSWORD`   |
+| `APPLE_SIGNING_IDENTITY`        | `github.prd.APPLE_SIGNING_IDENTITY`       |
+| `APPLE_NOTARIZATION_KEY_BASE64` | `github.prd.ASC_API_KEY_BASE64`           |
+| `APPLE_NOTARIZATION_KEY_ID`     | `github.prd.ASC_API_KEY_ID`               |
+| `APPLE_NOTARIZATION_ISSUER_ID`  | `github.prd.ASC_API_ISSUER_ID`            |
+| `APPLE_NOTARIZATION_APPLE_ID`   | `github.prd.APPLE_ID`                     |
+| `APPLE_NOTARIZATION_PASSWORD`   | `github.prd.APPLE_APP_SPECIFIC_PASSWORD`  |
+| `APPLE_NOTARIZATION_TEAM_ID`    | `github.prd.APPLE_TEAM_ID`                |
+
+- **A separate project, not a branch config.** The obvious move —
+  `github/prd_gh_lexd` — is wrong: a Doppler branch config inherits its
+  environment's root config, so a token scoped to it reads all 37 secrets in
+  `github/prd`, including `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN`. That is worse
+  than the pre-synced design it was meant to improve on. A separate project has
+  nothing to inherit. Verified: the minted token is refused on `github`
+  ("This token does not have access to requested project 'github'") and has no
+  write access to its own config.
+- The workflow fetches with `dopplerhq/secrets-fetch-action` (SHA-pinned) and
+  `inject-env-vars: true`. The action calls `core.setSecret` on every value, so
+  they are masked in logs, and they arrive as environment variables — which
+  means no secret is ever interpolated into a `run:` block, satisfying the
+  xtask validator rule for free.
+- Only the **sign** job fetches. The build job runs with no credentials at all,
+  which is what makes it safe for the bundle to be built on any tag.
+- **Notarization prefers the App Store Connect key.** Contrary to an earlier
+  reading of Doppler, `ASC_API_KEY_BASE64` / `_KEY_ID` / `ASC_API_ISSUER_ID` do
+  exist in `github/prd`; both credential sets were validated against Apple with
+  `xcrun notarytool history` and both authenticate as team `284A74LACP`.
+  `script/lexed-sign-mac` uses the ASC key when the trio is present and the
+  Apple-ID form otherwise. ASC is preferred because it is revocable on its own
+  and carries no 2FA coupling to a human's Apple ID.
+- `bundle-mac` gates its own signing path on `APPLE_NOTARIZATION_KEY` /
+  `_KEY_ID` / `_ISSUER_ID`, which the release pipeline never sets — the build
+  job deliberately takes the ad-hoc path and `script/lexed-sign-mac` does the
+  real work later. That gate is left as it is rather than taught a second
+  credential form.
 - Doppler carries two exact-duplicate pairs (`APPLE_CERTIFICATE` ==
   `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_PASSWORD` ==
   `APPLE_APP_SPECIFIC_PASSWORD`). The explicitly named key of each pair is
-  mapped; the aliases are ignored.
-- **Notarization authenticates as an Apple ID**, not with an App Store Connect
-  API key — no ASC key exists in Doppler, so `notarytool` runs with
-  `--apple-id --password --team-id`. Phase 4 consequence: `bundle-mac` gates
-  its whole signing path on `APPLE_NOTARIZATION_KEY` / `_KEY_ID` /
-  `_ISSUER_ID` all being set, so with this secret set it silently takes the
-  unsigned ad-hoc path — teaching it the Apple-ID form is a prerequisite for
-  the sign job, not a polish item. ASC keys remain the preferred path
-  (revocable on their own, no 2FA coupling to a human's Apple ID); when they
-  are minted, add them to the table and have the sign step prefer them when
-  both are present.
-- Doppler also holds `APPLE_SIGNING_IDENTITY`, the identity string
-  `codesign -s` wants. It is deliberately **not** synced to GitHub — Phase 4
-  should carry it as a workflow env var rather than mint a secret for what is
-  public certificate metadata. It matches the certificate currently in
-  Doppler, whose team id agrees with `APPLE_TEAM_ID` and which is valid
-  through April 2031.
+  referenced; the aliases are ignored.
+- `lexed-secrets-sync` resolves each value via `doppler secrets get <KEY>
+--plain` (ambient `doppler login`, no token handling) and pushes via `gh
+secret set NAME --repo lex-fmt/lexd-gui` **with the value on stdin, never
+  argv**. `--plain` appends a trailing newline that the script strips — a token
+  pushed with it attached fails every comparison downstream.
 - Prerequisite (human): `doppler login`, plus `gh auth` with admin rights on
   the repo. Export any future p12 with `openssl pkcs12 -export -legacy` if
   anything non-Apple will ever read it (OpenSSL 3 default export breaks
-  rcodesign).
+  rcodesign). The certificate now in Doppler is valid through April 2031.
 
 ## 5. Scheduled rebase canary: `lexed_rebase_check.yml`
 
@@ -359,10 +411,10 @@ upstream touches (expected: zero new upstream files; `bundle-mac` and
 
 1. **Test runtime on hosted runners** (phase 2): scoped-by-default with full
    suite on `main`, or pay for larger runners? Needs one measurement run.
-2. **Release channel story** (phase 4): stay on `dev` channel identity for the
-   first releases, or adopt Zed's preview/stable channel files properly?
-3. **Sign-job implementation** (phase 4): extract `bundle-mac`'s signing
-   functions into `script/lexed-sign-mac`, or port shipit's `sign.py`?
-   Recommendation: extract — it already matches this app's bundle layout.
+2. ~~**Release channel story**~~ — decided in phase 4: `stable` identity via
+   `ZED_RELEASE_CHANNEL` in the build job, `crates/zed/RELEASE_CHANNEL`
+   untouched. See §3.
+3. ~~**Sign-job implementation**~~ — decided in phase 4: extracted from
+   `bundle-mac` into `script/lexed-sign-mac`, as recommended.
 4. **Windows/Linux distribution**: out of scope here; `bundle-windows.ps1`
    still carries Zed identities and needs its own rebrand pass first.

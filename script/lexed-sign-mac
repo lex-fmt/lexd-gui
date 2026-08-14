@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+
+# Lexed macOS signing: take an unsigned .app produced by script/bundle-mac,
+# re-sign it with a real Developer ID identity, seal a fresh DMG around it,
+# notarize that DMG with Apple and staple the ticket (docs/lexed/ci-plan.md §3).
+#
+# The build and the signing are deliberately separate steps. The build runs on
+# every tag with no credentials at all; only this script ever sees them, so the
+# blast radius of the signing material is one job.
+#
+# Usage: script/lexed-sign-mac [-o <output-dir>] [-r <remote-server.gz>] <app-dir | app-tar>
+#
+# Credentials, all from the environment:
+#
+#   APPLE_SIGNING_IDENTITY       required; the string codesign -s wants
+#   MACOS_CERTIFICATE            required; base64 Developer ID Application .p12
+#   MACOS_CERTIFICATE_PASSWORD   required; passphrase for that .p12
+#
+# and one of the two notarization credential sets. The App Store Connect key is
+# preferred when present: it is revocable on its own and carries no 2FA coupling
+# to a human's Apple ID.
+#
+#   APPLE_NOTARIZATION_KEY_BASE64 + _KEY_ID + _ISSUER_ID   (App Store Connect)
+#   APPLE_NOTARIZATION_APPLE_ID + _PASSWORD + _TEAM_ID     (Apple ID)
+#
+# Exit codes: 0 success, 1 signing/notarization failure, 2 misconfiguration
+# (matching script/lexed-diff-guard).
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+repo_root="$(pwd)"
+
+output_dir=""
+remote_server_gz=""
+
+usage() {
+    echo "Usage: script/lexed-sign-mac [-o <output-dir>] [-r <remote-server.gz>] <app-dir | app-tar>" >&2
+}
+
+while getopts 'o:r:h' flag; do
+    case "${flag}" in
+        o) output_dir="${OPTARG}";;
+        r) remote_server_gz="${OPTARG}";;
+        h) usage; exit 0;;
+        *) usage; exit 2;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -ne 1 ]; then
+    usage
+    exit 2
+fi
+input="$1"
+
+if [ ! -e "$input" ]; then
+    echo "error: $input does not exist." >&2
+    exit 2
+fi
+
+missing=()
+for name in APPLE_SIGNING_IDENTITY MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD; do
+    if [ -z "${!name:-}" ]; then
+        missing+=("$name")
+    fi
+done
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "error: missing required credentials: ${missing[*]}" >&2
+    exit 2
+fi
+
+notary_auth=""
+if [ -n "${APPLE_NOTARIZATION_KEY_BASE64:-}" ] &&
+    [ -n "${APPLE_NOTARIZATION_KEY_ID:-}" ] &&
+    [ -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]; then
+    notary_auth="asc"
+elif [ -n "${APPLE_NOTARIZATION_APPLE_ID:-}" ] &&
+    [ -n "${APPLE_NOTARIZATION_PASSWORD:-}" ] &&
+    [ -n "${APPLE_NOTARIZATION_TEAM_ID:-}" ]; then
+    notary_auth="apple-id"
+else
+    echo "error: no complete notarization credential set in the environment." >&2
+    echo "Set APPLE_NOTARIZATION_KEY_BASE64 + _KEY_ID + _ISSUER_ID, or" >&2
+    echo "APPLE_NOTARIZATION_APPLE_ID + _PASSWORD + _TEAM_ID." >&2
+    exit 2
+fi
+
+entitlements="${repo_root}/crates/zed/resources/zed.entitlements"
+if [ ! -f "$entitlements" ]; then
+    echo "error: entitlements not found at $entitlements." >&2
+    exit 2
+fi
+
+# Everything below lives under one scratch directory that the trap removes. The
+# keychain path carries the pid and a random suffix because the two architecture
+# runs are the same script with the same inputs — a fixed path would have them
+# tearing down each other's keychain if they ever shared a host.
+work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lexed-sign.XXXXXX")"
+keychain="${work_dir}/lexed-sign-$$-${RANDOM}.keychain-db"
+keychain_password="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)"
+keychain_created=false
+
+# Captured before the splice so the trap can put the search list back exactly as
+# it found it. security prints one quoted path per line.
+original_keychains=()
+while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%\"}"
+    line="${line#\"}"
+    [ -n "$line" ] && original_keychains+=("$line")
+done < <(security list-keychains -d user)
+
+cleanup() {
+    local status=$?
+    if [ "$keychain_created" = true ]; then
+        if [ ${#original_keychains[@]} -gt 0 ]; then
+            security list-keychains -d user -s "${original_keychains[@]}" >/dev/null 2>&1 || true
+        fi
+        security delete-keychain "$keychain" >/dev/null 2>&1 || true
+    fi
+    if [ -f "${work_dir}/certificate.p12" ]; then
+        rm -Pf "${work_dir}/certificate.p12" 2>/dev/null || rm -f "${work_dir}/certificate.p12"
+    fi
+    rm -rf "$work_dir"
+    return $status
+}
+trap cleanup EXIT INT TERM
+
+echo "==> Staging the app bundle"
+staging="${work_dir}/staging"
+mkdir -p "$staging"
+if [ -d "$input" ]; then
+    # ditto rather than cp: it is the only copy on macOS that reliably preserves
+    # the symlinks, exec bits and extended attributes inside a bundle.
+    ditto "$input" "${staging}/$(basename "$input")"
+else
+    tar -xzf "$input" -C "$staging"
+fi
+
+app_path="$(find "$staging" -maxdepth 1 -name '*.app' -print -quit)"
+if [ -z "$app_path" ]; then
+    echo "error: no .app bundle found in $input." >&2
+    exit 2
+fi
+app_name="$(basename "$app_path")"
+echo "    ${app_name}"
+
+main_binary="${app_path}/Contents/MacOS/lexed"
+if [ ! -f "$main_binary" ]; then
+    echo "error: ${main_binary} is missing; this is not a Lexed bundle." >&2
+    exit 2
+fi
+
+case "$(lipo -archs "$main_binary")" in
+    *arm64*) arch_suffix="aarch64";;
+    *x86_64*) arch_suffix="x86_64";;
+    *) echo "error: unrecognized architecture in ${main_binary}." >&2; exit 2;;
+esac
+echo "    architecture: ${arch_suffix}"
+
+if [ -z "$output_dir" ]; then
+    output_dir="$(pwd)/target/lexed-signed-${arch_suffix}"
+fi
+mkdir -p "$output_dir"
+output_dir="$(cd "$output_dir" && pwd)"
+
+echo "==> Creating a throwaway keychain"
+security create-keychain -p "$keychain_password" "$keychain"
+keychain_created=true
+# Without -t there is no auto-lock timeout, so a long notarization wait cannot
+# lock the keychain out from under a later codesign.
+security set-keychain-settings "$keychain"
+security unlock-keychain -p "$keychain_password" "$keychain"
+
+printf '%s' "$MACOS_CERTIFICATE" | base64 --decode >"${work_dir}/certificate.p12"
+security import "${work_dir}/certificate.p12" -k "$keychain" \
+    -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+rm -Pf "${work_dir}/certificate.p12" 2>/dev/null || rm -f "${work_dir}/certificate.p12"
+
+# Without this, codesign blocks on an interactive "allow access" prompt that no
+# CI runner can answer.
+security set-key-partition-list -S apple-tool:,apple:,codesign: \
+    -s -k "$keychain_password" "$keychain" >/dev/null
+
+# The splice is the step people leave out. Creating a keychain does not put it in
+# the search list, and an identity in an unsearched keychain is an identity
+# codesign cannot find.
+if [ ${#original_keychains[@]} -gt 0 ]; then
+    security list-keychains -d user -s "${original_keychains[@]}" "$keychain" >/dev/null
+else
+    security list-keychains -d user -s "$keychain" >/dev/null
+fi
+
+echo "==> Signing (nested first, bundle last)"
+# --deep is deliberately absent: it re-signs nested content with the outer
+# bundle's entitlements, which is how a correctly signed helper turns into an
+# incorrectly signed one. Each component gets its own explicit pass instead.
+sign() {
+    local path="$1"
+    shift
+    /usr/bin/codesign --force --timestamp --options runtime \
+        --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$@" "$path" -v
+}
+
+sign "${app_path}/Contents/MacOS/cli"
+sign "${app_path}/Contents/MacOS/git"
+sign "${main_binary}" --entitlements "$entitlements"
+sign "${app_path}" --entitlements "$entitlements"
+
+echo "==> Verifying the signed bundle"
+/usr/bin/codesign --verify --strict --deep --verbose=2 "${app_path}"
+if [ -x "${repo_root}/script/verify-macos-document-icon" ]; then
+    "${repo_root}/script/verify-macos-document-icon" "${app_path}"
+fi
+
+if [ -n "$remote_server_gz" ]; then
+    echo "==> Signing the remote server binary"
+    if [ ! -f "$remote_server_gz" ]; then
+        echo "error: $remote_server_gz does not exist." >&2
+        exit 2
+    fi
+    remote_server_name="$(basename "$remote_server_gz")"
+    gunzip --stdout "$remote_server_gz" >"${work_dir}/remote_server"
+    chmod +x "${work_dir}/remote_server"
+    sign "${work_dir}/remote_server" --entitlements "$entitlements"
+    gzip -f --stdout --best "${work_dir}/remote_server" >"${output_dir}/${remote_server_name}"
+fi
+
+echo "==> Sealing a fresh DMG around the signed app"
+# The DMG that came out of the build wraps the unsigned app, so it is worthless
+# here — the image has to be rebuilt around the bundle that was just signed.
+dmg_source="${work_dir}/dmg"
+dmg_path="${work_dir}/Lexed-${arch_suffix}.dmg"
+mkdir -p "$dmg_source"
+mv "$app_path" "$dmg_source"
+ln -s /Applications "${dmg_source}/Applications"
+hdiutil create -volname Lexed -srcfolder "$dmg_source" -ov -format UDZO "$dmg_path"
+
+/usr/bin/codesign --force --timestamp --options runtime \
+    --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$dmg_path" -v
+
+echo "==> Notarizing (${notary_auth})"
+notary_log="${work_dir}/notarytool.json"
+notary_args=(submit --wait --timeout 30m --output-format json "$dmg_path")
+if [ "$notary_auth" = "asc" ]; then
+    printf '%s' "$APPLE_NOTARIZATION_KEY_BASE64" | base64 --decode >"${work_dir}/asc-key.p8"
+    notary_args+=(--key "${work_dir}/asc-key.p8"
+        --key-id "$APPLE_NOTARIZATION_KEY_ID"
+        --issuer "$APPLE_NOTARIZATION_ISSUER_ID")
+else
+    notary_args+=(--apple-id "$APPLE_NOTARIZATION_APPLE_ID"
+        --password "$APPLE_NOTARIZATION_PASSWORD"
+        --team-id "$APPLE_NOTARIZATION_TEAM_ID")
+fi
+
+notary_status=0
+notary_progress="${work_dir}/notarytool.progress"
+xcrun notarytool "${notary_args[@]}" >"$notary_log" 2>"$notary_progress" || notary_status=$?
+
+# --wait writes progress to stderr and the verdict as JSON on stdout. The status
+# is read from the last object because an in-progress report can precede the
+# final one; the id is stable across all of them.
+submission_id="$(sed -n 's/.*"id" *: *"\([^"]*\)".*/\1/p' "$notary_log" | head -1)"
+verdict="$(sed -n 's/.*"status" *: *"\([^"]*\)".*/\1/p' "$notary_log" | tail -1)"
+echo "    submission ${submission_id:-<none>}: ${verdict:-<no verdict>}"
+
+if [ "$verdict" != "Accepted" ]; then
+    echo "error: notarization did not succeed (notarytool exit ${notary_status})." >&2
+    sed 's/^/    /' "$notary_progress" >&2
+    sed 's/^/    /' "$notary_log" >&2
+    if [ -n "$submission_id" ]; then
+        echo "Fetching the notarization log:" >&2
+        # The same auth flags, minus the submit-only ones.
+        log_args=(log "$submission_id" "${output_dir}/notarization-${arch_suffix}.log")
+        if [ "$notary_auth" = "asc" ]; then
+            log_args+=(--key "${work_dir}/asc-key.p8"
+                --key-id "$APPLE_NOTARIZATION_KEY_ID"
+                --issuer "$APPLE_NOTARIZATION_ISSUER_ID")
+        else
+            log_args+=(--apple-id "$APPLE_NOTARIZATION_APPLE_ID"
+                --password "$APPLE_NOTARIZATION_PASSWORD"
+                --team-id "$APPLE_NOTARIZATION_TEAM_ID")
+        fi
+        xcrun notarytool "${log_args[@]}" >/dev/null 2>&1 || true
+        if [ -f "${output_dir}/notarization-${arch_suffix}.log" ]; then
+            sed 's/^/    /' "${output_dir}/notarization-${arch_suffix}.log" >&2
+        fi
+    fi
+    exit 1
+fi
+
+echo "==> Stapling"
+# A missing ticket costs an online Gatekeeper check on first launch, not a
+# rejection, so a stapler failure is worth reporting and not worth failing on.
+if ! xcrun stapler staple "$dmg_path"; then
+    echo "warning: stapling failed; the DMG is notarized but not stapled."
+fi
+
+echo "==> Gatekeeper assessment"
+spctl --assess -vv --type install "$dmg_path"
+
+mv "$dmg_path" "${output_dir}/Lexed-${arch_suffix}.dmg"
+echo
+echo "Signed and notarized: ${output_dir}/Lexed-${arch_suffix}.dmg"
