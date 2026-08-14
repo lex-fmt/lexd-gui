@@ -6,19 +6,24 @@
 #
 # Usage: script/lexed-changed-crates [name-prefix]
 #   name-prefix: only print crates whose package name starts with this.
+#
+# Environment:
+#   LEXED_BASE_REF: ref to diff against. CI sets it to the pull request's base
+#     branch, which is not origin/main until the branch stack has landed.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 prefix="${1:-}"
+base_ref="${LEXED_BASE_REF:-origin/main}"
 
-if ! git rev-parse --verify --quiet origin/main >/dev/null; then
-    echo "error: origin/main not found. Fetch it with: git fetch origin main" >&2
+if ! git rev-parse --verify --quiet "$base_ref" >/dev/null; then
+    echo "error: $base_ref not found. Fetch it with: git fetch origin" >&2
     exit 1
 fi
 
-base="$(git merge-base HEAD origin/main)"
+base="$(git merge-base HEAD "$base_ref")"
 
 # Diffing against the working tree rather than HEAD so that uncommitted work
 # counts too — a pre-push run should see whatever is on disk.

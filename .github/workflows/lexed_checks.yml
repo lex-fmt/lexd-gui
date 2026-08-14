@@ -1,0 +1,278 @@
+name: lexed_checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  CC: clang
+  CXX: clang++
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash -euxo pipefail {0}
+
+jobs:
+  style:
+    name: Style
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.0.0
+        with:
+          version: "9"
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: typos
+        uses: crate-ci/typos@2d0ce569feab1f8752f1dde43cc2f2aa53236e06 # v1.29.4
+        with:
+          config: ./typos.toml
+
+      - name: check-todos
+        run: ./script/check-todos
+
+      - name: shellcheck
+        run: ./script/shellcheck-scripts error
+
+      - name: prettier
+        run: ./script/prettier
+
+      - name: Disk usage
+        if: always()
+        run: df -h
+
+  clippy:
+    name: Clippy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # Zed's CI-only `-D warnings` trick: cargo merges a config placed in a
+      # parent directory of the workspace, so the checkout itself stays clean.
+      # The mold selection rides along in the same file for the same reason —
+      # `.cargo/ci-config.toml` is upstream-owned and stays untouched.
+      - name: Set up CI cargo config
+        run: |
+          mkdir -p ./../.cargo
+          cp ./.cargo/ci-config.toml ./../.cargo/config.toml
+
+      - name: Install mold and select it as the linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
+          {
+            echo
+            echo "[target.x86_64-unknown-linux-gnu]"
+            echo 'rustflags = ["-C", "link-arg=-fuse-ld=mold"]'
+          } >>./../.cargo/config.toml
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          key: clippy
+
+      # Complements rust-cache rather than replacing it: rust-cache restores
+      # this branch's whole target directory from the 10 GB branch-scoped
+      # GitHub cache, while sccache adds per-compilation-unit hits from a
+      # bucket shared across every branch and repo. That is what a cold
+      # feature branch, where rust-cache necessarily misses, has to fall back
+      # on. No-ops when the secret is absent, so fork PRs stay green.
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: ./script/linux
+
+      - name: Download WASI SDK
+        if: runner.os == 'Linux'
+        run: ./script/download-wasi-sdk
+
+      - name: Limit target directory size
+        run: ./script/clear-target-dir-if-larger-than 350 200
+
+      - name: clippy
+        run: ./script/clippy
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h
+          du -sh target 2>/dev/null || true
+
+      - name: Remove CI cargo config
+        if: always()
+        run: rm -rf ./../.cargo
+
+  tests:
+    name: Tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 350
+
+      # Only this job needs it. Clippy's target directory measures 5.7 GB;
+      # building every test binary in the workspace produces 75 GB, which
+      # leaves under 9 GB spare on a stock runner.
+      - name: Reclaim runner disk space
+        run: ./script/lexed-ci-reclaim-disk
+
+      - name: Set up CI cargo config
+        run: |
+          mkdir -p ./../.cargo
+          cp ./.cargo/ci-config.toml ./../.cargo/config.toml
+
+      - name: Install mold and select it as the linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
+          {
+            echo
+            echo "[target.x86_64-unknown-linux-gnu]"
+            echo 'rustflags = ["-C", "link-arg=-fuse-ld=mold"]'
+          } >>./../.cargo/config.toml
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          key: tests
+
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
+
+      - name: Install Linux dependencies
+        run: ./script/linux
+
+      - name: Download WASI SDK
+        run: ./script/download-wasi-sdk
+
+      - name: Install nextest
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          tool: nextest
+
+      # On a pull request only the crates the branch touches (and everything
+      # that depends on them) are worth running; a push to main always runs the
+      # whole suite. The `lex_*` crates are the fork's own code and always run.
+      - id: scope
+        name: Compute test scope
+        run: |
+          if [ -z "${GITHUB_BASE_REF:-}" ]; then
+            echo "push build: running the full workspace"
+            echo "filterset=" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --depth=350 origin "+refs/heads/${GITHUB_BASE_REF}:refs/remotes/origin/${GITHUB_BASE_REF}"
+          packages="$(
+            {
+              LEXED_BASE_REF="origin/${GITHUB_BASE_REF}" script/lexed-changed-crates
+              cargo metadata --format-version=1 --no-deps |
+                jq -r '.packages[].name' |
+                grep '^lex_' || true
+            } | sort -u
+          )"
+          filterset="$(echo "$packages" | sed '/^$/d; s/.*/rdeps(&)/' | paste -sd '|' -)"
+          echo "filterset: ${filterset}"
+          echo "filterset=${filterset}" >>"$GITHUB_OUTPUT"
+
+      - name: Limit target directory size
+        run: ./script/clear-target-dir-if-larger-than 350 200
+
+      - name: cargo nextest
+        env:
+          FILTERSET: ${{ steps.scope.outputs.filterset }}
+        run: |
+          if [ -n "$FILTERSET" ]; then
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn -E "$FILTERSET"
+          else
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn
+          fi
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h
+          du -sh target 2>/dev/null || true
+
+      - name: Remove CI cargo config
+        if: always()
+        run: rm -rf ./../.cargo
+
+  deps_and_security:
+    name: Dependencies and security
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          tool: cargo-machete@0.7.0,cargo-audit@0.22.2,cargo-deny@0.20.2
+
+      - name: cargo machete
+        run: cargo machete
+
+      - name: cargo audit
+        run: cargo audit
+
+      - name: cargo deny
+        run: cargo deny check licenses bans sources
+
+      - name: Disk usage
+        if: always()
+        run: df -h
+
+  licenses:
+    name: Licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: check-licenses
+        run: ./script/check-licenses
+
+      - uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9 # v2.84.0
+        with:
+          tool: cargo-about@0.8.2
+
+      - name: generate-licenses
+        run: ./script/generate-licenses
+
+      - name: Disk usage
+        if: always()
+        run: df -h

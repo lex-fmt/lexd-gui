@@ -142,7 +142,7 @@ mod tests {
     /// outline view to a single item.
     ///
     /// The document deliberately has a single top-level session:
-    /// tree-sitter-lex mis-parses session or document titles in several
+    /// tree-sitter-lex misparses session or document titles in several
     /// multi-session shapes (lex-fmt/tree-sitter-lex#117), which is what
     /// breaks the outline view on real documents today. When that bug is
     /// fixed and the pinned grammar bumped, extend this document with an

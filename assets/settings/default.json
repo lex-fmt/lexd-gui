@@ -2346,7 +2346,7 @@
     },
     // Lexed: outline and breadcrumbs for Lex come from lex-lsp's
     // documentSymbol (same source VS Code uses) rather than the
-    // tree-sitter grammar, which mis-parses session titles in common
+    // tree-sitter grammar, which misparses session titles in common
     // document shapes (lex-fmt/tree-sitter-lex#117).
     "Lex": {
       "document_symbols": "on",

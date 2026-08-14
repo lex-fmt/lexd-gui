@@ -1,0 +1,26 @@
+# cargo-audit configuration for Lexed. Fork-added; upstream Zed does not run
+# cargo-audit, so this file has no rebase conflict surface.
+#
+# Every entry below is inherited from upstream Zed's Cargo.lock — the fork adds
+# no dependencies of its own. They are ignored so that the job fails on the
+# advisories a Lexed change introduces rather than on a standing backlog. The
+# list is a snapshot: it should shrink at each upstream rebase, and an entry
+# whose crate has since gained a fixed release should be dropped rather than
+# carried forward.
+
+[advisories]
+ignore = [
+    "RUSTSEC-2023-0071", # rsa 0.9.10, Marvin timing sidechannel; no fixed release upstream
+    "RUSTSEC-2026-0001", # rkyv 0.7.45, UB in Arc/Rc from_value on OOM
+    "RUSTSEC-2026-0235", # rkyv 0.7.45, out-of-bounds reads validating Rc/Arc archives
+    "RUSTSEC-2026-0098", # rustls-webpki 0.101.7, URI name constraints accepted
+    "RUSTSEC-2026-0099", # rustls-webpki 0.101.7, wildcard name constraints accepted
+    "RUSTSEC-2026-0104", # rustls-webpki 0.101.7, panic parsing a CRL
+    "RUSTSEC-2026-0185", # quinn-proto 0.11.14, memory exhaustion reassembling streams
+    "RUSTSEC-2026-0193", # ammonia 4.1.2, mXSS via MathML annotation-xml
+    "RUSTSEC-2026-0213", # ammonia 4.1.2, XSS via SVG animate/set
+    "RUSTSEC-2026-0194", # quick-xml 0.30/0.37/0.38/0.39, quadratic duplicate-attribute check
+    "RUSTSEC-2026-0195", # quick-xml 0.30/0.37/0.38/0.39, unbounded namespace allocation
+    "RUSTSEC-2026-0204", # crossbeam-epoch 0.9.18, invalid pointer deref in fmt::Pointer
+    "RUSTSEC-2026-0222", # wasmtime 36.0.12, type indices mixed between engines
+]
