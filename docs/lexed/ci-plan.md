@@ -224,20 +224,100 @@ churn), map from Doppler keys in one place. New `script/lexed-secrets-sync`
 
 ## 5. Scheduled rebase canary: `lexed_rebase_check.yml`
 
-Weekly cron + `workflow_dispatch`. Read-only, never pushes:
+Weekly cron (Mondays, 05:17 UTC) + `workflow_dispatch`. Read-only, never
+pushes:
 
-1. Checkout with full history; `git fetch https://github.com/zed-industries/zed
-main` (and tags).
+1. Checkout with `fetch-depth: 0`; `git fetch
+https://github.com/zed-industries/zed main`. Full history is not optional —
+   the replay needs every commit back to `ZED_BASE`, and `ZED_BASE` is an
+   upstream commit, so the fork's history reaches into Zed's. That is also
+   what makes the upstream fetch near-free: only the commits upstream added
+   since the pin are missing. No explicit tag fetch — the canary targets
+   `main`, and tag-following already brings along anything reachable.
 2. Attempt `git rebase --onto <target> $(cat ZED_BASE)` on a throwaway
    worktree, where `<target>` is upstream `main` for the weekly canary
    (fork-strategy's actual rebase cadence is quarterly onto stable tags; the
    weekly run is early conflict radar, not the rebase itself).
-3. Clean completion → green, write "rebases cleanly onto <sha>" to the step
+3. On a clean replay, run `cargo check --workspace` on the rebased tree — see
+   "Semantic drift" below.
+4. Clean completion → green, write "rebases cleanly onto <sha>" to the step
    summary. Conflict → `git rebase --abort` after writing the conflicting
    file list to `$GITHUB_STEP_SUMMARY`, exit 1. A red weekly run is the
    signal that spawns an agent session while the conflict is still small.
-4. `permissions: contents: read`; no issue creation, no notifications
+5. `permissions: contents: read`; no issue creation, no notifications
    machinery — the failed-run email/badge is enough to start with.
+
+**All of the logic lives in `script/lexed-rebase-check`, not the workflow.** A
+`schedule` trigger only fires from the default branch, so the cron itself is
+unverifiable until after merge; leaving the workflow with nothing but setup and
+one call means the part that can be wrong is the part that runs locally. The
+script takes an optional target (default `FETCH_HEAD`), so
+`script/lexed-rebase-check "$(cat ZED_BASE)"` is a trivially clean self-test
+and any fetched ref exercises the real path. It replays inside a detached
+`git worktree` under `mktemp -d`, aborts the rebase and removes the worktree
+from a trap on `EXIT`, `INT`, and `TERM`, and falls back to a
+`github-actions[bot]` committer ident
+only when the environment has none — so a developer running it never has their
+branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 textual
+conflict, 2 misconfiguration (matching `lexed-diff-guard`), 3 semantic drift.
+
+The `FETCH_HEAD` default has one trap worth guarding: it holds whatever the last
+fetch of _any_ remote left behind, and the pre-push hooks fetch `origin`, so a
+local run can silently end up rebasing the fork onto its own `main`. The script
+refuses a **defaulted** `FETCH_HEAD` that is an ancestor of `origin/main`,
+since upstream Zed never is. An explicitly passed target is trusted as given —
+otherwise the documented `"$(cat ZED_BASE)"` self-test, an ancestor by
+construction, would be refused too. CI is unaffected either way: it fetches
+upstream in the step immediately before.
+
+### Semantic drift
+
+A textually clean rebase can still be a broken tree. Git reports a conflict
+only when the same lines move on both sides; upstream renaming a function the
+`lex_*` crates call, or changing a trait the fork implements, touches lines the
+fork never edited and replays silently. That failure mode is exactly the one
+the quarterly rebase most needs warning about, and it is invisible to `git`.
+
+So after a clean replay the canary runs `cargo check --workspace` on the
+rebased tree and exits 3 when it errors, with the last 50 lines of cargo output
+in the step summary. The three outcomes are distinguishable at a glance: a
+textual conflict names the conflicting files, semantic drift shows the compiler
+error, clean says so.
+
+`--semantic` gates it (or `LEXED_REBASE_SEMANTIC=1`); the workflow passes the
+flag, and a bare local run stays the seconds-long textual rehearsal. The check
+honors `CARGO_TARGET_DIR` when the caller sets one — useful locally, where
+borrowing a warm target directory turns a cold workspace build into a short
+one — and otherwise mints a throwaway under `TMPDIR` that the trap removes. It
+never writes into the caller's checkout. The trap only deletes a
+target directory the script created; one handed in through the environment
+belongs to the caller.
+
+CI cost is the reason the job carries `timeout-minutes: 90`, the disk reclaim
+step, and `setup-sccache` wired exactly as `lexed_checks.yml` does it. The
+throwaway worktree's target directory is new every week, so `Swatinem/rust-cache`
+has nothing to restore and sccache's shared bucket is the only cache that can
+help.
+
+**Expect week one to be cold.** sccache keys on the exact rustc invocation, and
+the other jobs do not issue the ones this job needs: `script/clippy` builds
+`--release --all-features`, and the tests job emits `link` where `cargo check`
+emits metadata only. So the canary largely populates its own corner of the
+bucket rather than reusing anyone else's. From week two on the economics are
+good — upstream drifts by a few dozen commits a week, so the overwhelming
+majority of compilation units are byte-identical to last Monday's and hit.
+
+The steady state has a bad case worth budgeting for, though: when upstream
+touches a foundational crate, everything downstream of it recompiles and the
+run approaches a cold build again. The measurement run here landed on exactly
+that — upstream's tip was `gpui: Unify performance tracking under the profiler
+feature`. So the 90-minute timeout is sized for a cold run, not the median one.
+
+Not included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
+building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`
+copy (its `-D warnings` would turn upstream's warnings into canary failures,
+and the parent-directory trick does not reach a worktree living outside the
+checkout anyway).
 
 ## Sequencing
 

@@ -70,6 +70,49 @@ Pre-push runs are scoped to what you actually changed:
 
 Each takes `--list` to print what it detected without running anything.
 
+## Rebase canary
+
+A weekly workflow (`lexed_rebase_check.yml`) rehearses
+`git rebase --onto <upstream main> $(cat ZED_BASE)` and goes red when the fork
+stops replaying cleanly. It is early conflict radar, not the rebase itself —
+that stays quarterly and onto upstream stable tags (fork-strategy §6).
+
+Run the same check locally against any ref:
+
+```sh
+git fetch https://github.com/zed-industries/zed main
+script/lexed-rebase-check FETCH_HEAD
+```
+
+Run those two together. `FETCH_HEAD` is whatever the last fetch of _any_ remote
+left behind, and the pre-push hooks fetch `origin`, so it goes stale easily. The
+script refuses a defaulted `FETCH_HEAD` that turns out to be an ancestor of
+`origin/main` — upstream Zed never is — rather than rebasing the fork onto its
+own `main` and reporting a pile of meaningless conflicts. It also prints the
+target commit's sha, date, and subject before starting, so you can see what you
+got. A target you pass explicitly is trusted as given and skips the check, which
+is what keeps the `"$(cat ZED_BASE)"` self-test above working.
+
+The replay happens in a throwaway detached worktree, so your branch, working
+tree, and git config are untouched either way. Exit 1 means conflict, and the
+conflicting files are printed.
+
+That bare run is textual only and takes about two seconds. Upstream can also
+break the fork without touching a line the fork edited — renaming a function
+the `lex_*` crates call conflicts with nothing and replays silently — so
+`--semantic` adds a `cargo check --workspace` on the rebased tree and exits 3
+when it fails. That build is workspace-sized, which is why it is opt-in. It is
+what CI runs weekly:
+
+```sh
+script/lexed-rebase-check --semantic FETCH_HEAD
+```
+
+By default the check builds into a throwaway target directory that is deleted
+afterward, so nothing lands in your checkout. Set `CARGO_TARGET_DIR` to borrow
+a warm one and turn a cold workspace build into a short one — the script never
+deletes a target directory you handed it.
+
 ## Agent sessions
 
 `.claude/settings.json` and `.codex/hooks.json` each register a `SessionStart`

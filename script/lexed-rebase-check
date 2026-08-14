@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+
+# Lexed rebase canary: rehearse `git rebase --onto <target> $(cat ZED_BASE)`
+# and report whether the fork's commits still replay onto upstream.
+#
+# This is early conflict radar, not the rebase itself — the real cadence is
+# quarterly onto upstream stable tags (docs/lexed/fork-strategy.md §6). Nothing
+# here is destructive: the replay happens in a throwaway detached worktree, so
+# the branch and working tree the caller sits on are never touched.
+#
+# Usage: script/lexed-rebase-check [--semantic] [target]
+#   target:     commit-ish to rebase onto. Given explicitly it is trusted as
+#               given. Omitted, it defaults to FETCH_HEAD and is refused if it
+#               turns out to be an ancestor of origin/main, which means some
+#               other fetch clobbered it and it is not upstream Zed.
+#   --semantic: after a clean replay, also run `cargo check --workspace` on the
+#               rebased tree. A textually clean rebase can still be broken —
+#               upstream renaming an API the fork calls conflicts with nothing.
+#               Off by default so a bare local run stays a seconds-long textual
+#               rehearsal; LEXED_REBASE_SEMANTIC=1 also turns it on.
+#
+# Environment:
+#   CARGO_TARGET_DIR: honored if set, so a local run can borrow a warm target
+#     directory. Unset, the check gets a throwaway one — nothing is ever
+#     written into the caller's checkout.
+#
+# Exit codes: 0 clean, 1 textual conflict, 2 misconfiguration, 3 semantic drift.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+SEMANTIC=0
+if [ "${LEXED_REBASE_SEMANTIC:-0}" = "1" ]; then
+    SEMANTIC=1
+fi
+TARGET_REF=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --semantic)
+        SEMANTIC=1
+        ;;
+    -*)
+        echo "error: unknown option '$1'." >&2
+        echo "Usage: script/lexed-rebase-check [--semantic] [target]" >&2
+        exit 2
+        ;;
+    *)
+        if [ -n "$TARGET_REF" ]; then
+            echo "error: unexpected extra argument '$1'." >&2
+            exit 2
+        fi
+        TARGET_REF="$1"
+        ;;
+    esac
+    shift
+done
+
+TARGET_EXPLICIT=1
+if [ -z "$TARGET_REF" ]; then
+    TARGET_REF="FETCH_HEAD"
+    TARGET_EXPLICIT=0
+fi
+
+BASE="$(cat ZED_BASE)"
+
+if ! git cat-file -e "$BASE" 2>/dev/null; then
+    echo "error: base commit $BASE (from ZED_BASE) not found in history." >&2
+    echo "In CI, ensure the checkout has enough depth (fetch-depth: 0)." >&2
+    exit 2
+fi
+
+if ! TARGET="$(git rev-parse --verify --quiet "${TARGET_REF}^{commit}")"; then
+    echo "error: target '$TARGET_REF' does not resolve to a commit." >&2
+    echo "Fetch upstream first, e.g. git fetch https://github.com/zed-industries/zed main" >&2
+    exit 2
+fi
+
+# FETCH_HEAD is whatever the last fetch of ANY remote left behind, and this
+# repo's pre-push hooks fetch origin — so the default silently degrades into
+# "rebase the fork onto its own main", which produces a pile of meaningless
+# conflicts. Upstream Zed is never an ancestor of our main, so that test
+# separates a stale default from a real one. Only the default is second-guessed;
+# an explicit target is taken as given, which keeps the documented self-test
+# against ZED_BASE (an ancestor by construction) working.
+if [ "$TARGET_EXPLICIT" = "0" ] && git rev-parse --verify --quiet origin/main >/dev/null &&
+    git merge-base --is-ancestor "$TARGET" origin/main; then
+    echo "error: FETCH_HEAD (${TARGET:0:10}) is an ancestor of origin/main, so it is not" >&2
+    echo "upstream Zed — some other fetch has overwritten it since. Fetch upstream:" >&2
+    echo "    git fetch https://github.com/zed-industries/zed main" >&2
+    echo "Or pass a target explicitly, which is trusted as given." >&2
+    exit 2
+fi
+
+# Replaying commits mints new committer idents. Fall back to the CI bot only
+# when the environment has no identity of its own — never overwrite a
+# developer's. Env vars rather than `git config`, because a linked worktree
+# shares the main repo's config file.
+if ! git config --get user.email >/dev/null 2>&1; then
+    export GIT_AUTHOR_NAME="github-actions[bot]"
+    export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+    export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+    export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+fi
+
+COMMITS="$(git rev-list --count "$BASE..HEAD")"
+WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/lexed-rebase-check.XXXXXX")"
+LOG="$(mktemp "${TMPDIR:-/tmp}/lexed-rebase-check-log.XXXXXX")"
+# Only ever removed when this script is the one that created it; a target
+# directory handed in through the environment belongs to the caller.
+OWNED_TARGET_DIR=""
+
+cleanup() {
+    git -C "$WORKTREE" rebase --abort >/dev/null 2>&1 || true
+    git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
+    rm -rf "$WORKTREE" "$LOG"
+    if [ -n "$OWNED_TARGET_DIR" ]; then
+        rm -rf "$OWNED_TARGET_DIR"
+    fi
+    git worktree prune >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+# A cancelled CI job or a local Ctrl-C would otherwise leave the worktree and a
+# half-finished rebase behind: bash runs the EXIT trap when the shell exits, and
+# an untrapped fatal signal never gets that far. These exit, which does.
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Always drains stdin, so a caller can pipe into it unconditionally without
+# the producer taking SIGPIPE when the workflow summary is absent.
+summary() {
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        cat >>"$GITHUB_STEP_SUMMARY"
+    else
+        cat >/dev/null
+    fi
+}
+
+# Naming the target commit, not just its sha. `FETCH_HEAD` is whatever the last
+# fetch of any remote left behind — the push hooks here fetch origin, which is
+# enough to silently retarget a local run at the fork's own main.
+echo "Rebasing $COMMITS commit(s) since ZED_BASE (${BASE:0:10}) onto:"
+git --no-pager log -1 --format='  %h %ad  %s' --date=short "$TARGET"
+
+# --detach so no branch is created, and none can be left behind on failure.
+git worktree add --quiet --detach "$WORKTREE" HEAD
+
+if ! git -C "$WORKTREE" rebase --onto "$TARGET" "$BASE" >"$LOG" 2>&1; then
+    CONFLICTS="$(git -C "$WORKTREE" diff --name-only --diff-filter=U || true)"
+    if [ -z "$CONFLICTS" ]; then
+        # Rebase failed without leaving unmerged paths — the log is the only clue.
+        echo "error: rebase onto $TARGET failed without reporting conflicting files." >&2
+        cat "$LOG" >&2
+        exit 1
+    fi
+
+    echo "CONFLICT: rebase onto $TARGET stopped. Conflicting files:"
+    printf '%s\n' "$CONFLICTS"
+
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Textual conflict.** The $COMMITS commits since ZED_BASE"
+        echo "(\`${BASE:0:10}\`) do not replay cleanly onto \`$TARGET\`."
+        echo
+        echo "Conflicting files:"
+        echo
+        printf '%s\n' "$CONFLICTS" | while read -r file; do
+            printf -- '- `%s`\n' "$file"
+        done
+    } | summary
+
+    exit 1
+fi
+
+REPLAYED="rebases cleanly onto $TARGET ($COMMITS commits replayed)"
+
+if [ "$SEMANTIC" != "1" ]; then
+    echo "$REPLAYED"
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Clean.** $REPLAYED"
+    } | summary
+    exit 0
+fi
+
+if [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    OWNED_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lexed-rebase-check-target.XXXXXX")"
+    export CARGO_TARGET_DIR="$OWNED_TARGET_DIR"
+fi
+
+echo "$REPLAYED; running cargo check --workspace on the rebased tree"
+
+if (cd "$WORKTREE" && cargo check --workspace 2>&1) | tee "$LOG"; then
+    echo "$REPLAYED, and cargo check passes"
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Clean.** $REPLAYED, and \`cargo check --workspace\` passes on the"
+        echo "rebased tree."
+    } | summary
+    exit 0
+fi
+
+echo "SEMANTIC DRIFT: $REPLAYED, but cargo check --workspace fails on the rebased tree."
+
+{
+    echo "## Rebase canary"
+    echo
+    echo "**Semantic drift.** The $COMMITS commits since ZED_BASE"
+    echo "(\`${BASE:0:10}\`) replay onto \`$TARGET\` without a textual conflict,"
+    echo "but \`cargo check --workspace\` fails on the result — upstream changed"
+    echo "something the fork's code depends on in a way git cannot see."
+    echo
+    echo '```'
+    # Drop cargo's per-crate progress so the 50-line window is diagnostics
+    # rather than the tail of a 250-crate "Checking ..." list.
+    { grep -vE '^ +(Checking|Compiling|Finished|Downloading|Downloaded|Updating|Blocking) ' "$LOG" || true; } | tail -n 50
+    echo '```'
+} | summary
+
+exit 3
