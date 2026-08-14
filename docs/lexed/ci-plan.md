@@ -286,9 +286,17 @@ belongs to the caller.
 CI cost is the reason the job carries `timeout-minutes: 90`, the disk reclaim
 step, and `setup-sccache` wired exactly as `lexed_checks.yml` does it. The
 throwaway worktree's target directory is new every week, so `Swatinem/rust-cache`
-has nothing to restore; sccache's shared bucket is what makes the run tractable,
-because the replayed tree is upstream's code plus the fork's and nearly every
-compilation unit is byte-identical to one another job already compiled. Not
+has nothing to restore and sccache's shared bucket is the only cache that can
+help.
+
+**Expect week one to be cold.** sccache keys on the exact rustc invocation, and
+the other jobs do not issue the ones this job needs: `script/clippy` builds
+`--release --all-features`, and the tests job emits `link` where `cargo check`
+emits metadata only. So the canary largely populates its own corner of the
+bucket rather than reusing anyone else's. From week two on the economics are
+good — upstream drifts by a few dozen commits a week, so the overwhelming
+majority of compilation units are byte-identical to last Monday's and hit. The
+90-minute timeout is sized for the cold first run, not the steady state. Not
 included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
 building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`
 copy (its `-D warnings` would turn upstream's warnings into canary failures,
