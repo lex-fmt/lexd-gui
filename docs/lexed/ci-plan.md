@@ -249,13 +249,14 @@ https://github.com/zed-industries/zed main`. Full history is not optional —
 
 **All of the logic lives in `script/lexed-rebase-check`, not the workflow.** A
 `schedule` trigger only fires from the default branch, so the cron itself is
-unverifiable until after merge; keeping the workflow to three steps (checkout,
-fetch, run script) means the part that can be wrong is the part that runs
-locally. The script takes an optional target (default `FETCH_HEAD`), so
+unverifiable until after merge; leaving the workflow with nothing but setup and
+one call means the part that can be wrong is the part that runs locally. The
+script takes an optional target (default `FETCH_HEAD`), so
 `script/lexed-rebase-check "$(cat ZED_BASE)"` is a trivially clean self-test
 and any fetched ref exercises the real path. It replays inside a detached
 `git worktree` under `mktemp -d`, aborts the rebase and removes the worktree
-from an `EXIT` trap, and falls back to a `github-actions[bot]` committer ident
+from a trap on `EXIT`, `INT`, and `TERM`, and falls back to a
+`github-actions[bot]` committer ident
 only when the environment has none — so a developer running it never has their
 branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 textual
 conflict, 2 misconfiguration (matching `lexed-diff-guard`), 3 semantic drift.
@@ -278,8 +279,8 @@ error, clean says so.
 flag, and a bare local run stays the seconds-long textual rehearsal. The check
 honors `CARGO_TARGET_DIR` when the caller sets one — useful locally, where
 borrowing a warm target directory turns a cold workspace build into a short
-one — and otherwise mints a throwaway under `TMPDIR` that the `EXIT` trap
-removes. It never writes into the caller's checkout. The trap only deletes a
+one — and otherwise mints a throwaway under `TMPDIR` that the trap removes. It
+never writes into the caller's checkout. The trap only deletes a
 target directory the script created; one handed in through the environment
 belongs to the caller.
 
@@ -295,9 +296,15 @@ the other jobs do not issue the ones this job needs: `script/clippy` builds
 emits metadata only. So the canary largely populates its own corner of the
 bucket rather than reusing anyone else's. From week two on the economics are
 good — upstream drifts by a few dozen commits a week, so the overwhelming
-majority of compilation units are byte-identical to last Monday's and hit. The
-90-minute timeout is sized for the cold first run, not the steady state. Not
-included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
+majority of compilation units are byte-identical to last Monday's and hit.
+
+The steady state has a bad case worth budgeting for, though: when upstream
+touches a foundational crate, everything downstream of it recompiles and the
+run approaches a cold build again. The measurement run here landed on exactly
+that — upstream's tip was `gpui: Unify performance tracking under the profiler
+feature`. So the 90-minute timeout is sized for a cold run, not the median one.
+
+Not included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
 building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`
 copy (its `-D warnings` would turn upstream's warnings into canary failures,
 and the parent-directory trick does not reach a worktree living outside the

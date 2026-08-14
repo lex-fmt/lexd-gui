@@ -98,6 +98,11 @@ cleanup() {
     git worktree prune >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
+# A cancelled CI job or a local Ctrl-C would otherwise leave the worktree and a
+# half-finished rebase behind: bash runs the EXIT trap when the shell exits, and
+# an untrapped fatal signal never gets that far. These exit, which does.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Always drains stdin, so a caller can pipe into it unconditionally without
 # the producer taking SIGPIPE when the workflow summary is absent.
@@ -187,7 +192,9 @@ echo "SEMANTIC DRIFT: $REPLAYED, but cargo check --workspace fails on the rebase
     echo "something the fork's code depends on in a way git cannot see."
     echo
     echo '```'
-    tail -n 50 "$LOG"
+    # Drop cargo's per-crate progress so the 50-line window is diagnostics
+    # rather than the tail of a 250-crate "Checking ..." list.
+    { grep -vE '^ +(Checking|Compiling|Finished|Downloading|Downloaded|Updating|Blocking) ' "$LOG" || true; } | tail -n 50
     echo '```'
 } | summary
 
