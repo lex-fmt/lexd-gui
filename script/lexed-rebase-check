@@ -1,24 +1,61 @@
 #!/usr/bin/env bash
 
 # Lexed rebase canary: rehearse `git rebase --onto <target> $(cat ZED_BASE)`
-# and report whether the fork's commits still replay cleanly onto upstream.
+# and report whether the fork's commits still replay onto upstream.
 #
 # This is early conflict radar, not the rebase itself — the real cadence is
 # quarterly onto upstream stable tags (docs/lexed/fork-strategy.md §6). Nothing
 # here is destructive: the replay happens in a throwaway detached worktree, so
 # the branch and working tree the caller sits on are never touched.
 #
-# Usage: script/lexed-rebase-check [target]
-#   target: commit-ish to rebase onto (default: FETCH_HEAD, i.e. whatever the
-#           caller last fetched from upstream).
+# Usage: script/lexed-rebase-check [--semantic] [target]
+#   target:     commit-ish to rebase onto (default: FETCH_HEAD, i.e. whatever
+#               the caller last fetched from upstream).
+#   --semantic: after a clean replay, also run `cargo check --workspace` on the
+#               rebased tree. A textually clean rebase can still be broken —
+#               upstream renaming an API the fork calls conflicts with nothing.
+#               Off by default so a bare local run stays a seconds-long textual
+#               rehearsal; LEXED_REBASE_SEMANTIC=1 also turns it on.
 #
-# Exit codes: 0 clean, 1 conflict, 2 misconfiguration.
+# Environment:
+#   CARGO_TARGET_DIR: honored if set, so a local run can borrow a warm target
+#     directory. Unset, the check gets a throwaway one — nothing is ever
+#     written into the caller's checkout.
+#
+# Exit codes: 0 clean, 1 textual conflict, 2 misconfiguration, 3 semantic drift.
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-TARGET_REF="${1:-FETCH_HEAD}"
+SEMANTIC=0
+if [ "${LEXED_REBASE_SEMANTIC:-0}" = "1" ]; then
+    SEMANTIC=1
+fi
+TARGET_REF=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --semantic)
+        SEMANTIC=1
+        ;;
+    -*)
+        echo "error: unknown option '$1'." >&2
+        echo "Usage: script/lexed-rebase-check [--semantic] [target]" >&2
+        exit 2
+        ;;
+    *)
+        if [ -n "$TARGET_REF" ]; then
+            echo "error: unexpected extra argument '$1'." >&2
+            exit 2
+        fi
+        TARGET_REF="$1"
+        ;;
+    esac
+    shift
+done
+
+TARGET_REF="${TARGET_REF:-FETCH_HEAD}"
 BASE="$(cat ZED_BASE)"
 
 if ! git cat-file -e "$BASE" 2>/dev/null; then
@@ -46,20 +83,21 @@ fi
 
 COMMITS="$(git rev-list --count "$BASE..HEAD")"
 WORKTREE="$(mktemp -d "${TMPDIR:-/tmp}/lexed-rebase-check.XXXXXX")"
-REBASE_LOG="$(mktemp "${TMPDIR:-/tmp}/lexed-rebase-check-log.XXXXXX")"
+LOG="$(mktemp "${TMPDIR:-/tmp}/lexed-rebase-check-log.XXXXXX")"
+# Only ever removed when this script is the one that created it; a target
+# directory handed in through the environment belongs to the caller.
+OWNED_TARGET_DIR=""
 
 cleanup() {
     git -C "$WORKTREE" rebase --abort >/dev/null 2>&1 || true
     git worktree remove --force "$WORKTREE" >/dev/null 2>&1 || true
-    rm -rf "$WORKTREE" "$REBASE_LOG"
+    rm -rf "$WORKTREE" "$LOG"
+    if [ -n "$OWNED_TARGET_DIR" ]; then
+        rm -rf "$OWNED_TARGET_DIR"
+    fi
     git worktree prune >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
-
-echo "Rebasing $COMMITS commit(s) since ZED_BASE (${BASE:0:10}) onto ${TARGET:0:10}"
-
-# --detach so no branch is created, and none can be left behind on failure.
-git worktree add --quiet --detach "$WORKTREE" HEAD
 
 # Always drains stdin, so a caller can pipe into it unconditionally without
 # the producer taking SIGPIPE when the workflow summary is absent.
@@ -71,39 +109,86 @@ summary() {
     fi
 }
 
-if git -C "$WORKTREE" rebase --onto "$TARGET" "$BASE" >"$REBASE_LOG" 2>&1; then
-    result="rebases cleanly onto $TARGET ($COMMITS commits replayed)"
-    echo "$result"
-    summary <<EOF
-## Rebase canary
+# Naming the target commit, not just its sha. `FETCH_HEAD` is whatever the last
+# fetch of any remote left behind — the push hooks here fetch origin, which is
+# enough to silently retarget a local run at the fork's own main.
+echo "Rebasing $COMMITS commit(s) since ZED_BASE (${BASE:0:10}) onto:"
+git --no-pager log -1 --format='  %h %ad  %s' --date=short "$TARGET"
 
-OK: $result
-EOF
-    exit 0
-fi
+# --detach so no branch is created, and none can be left behind on failure.
+git worktree add --quiet --detach "$WORKTREE" HEAD
 
-CONFLICTS="$(git -C "$WORKTREE" diff --name-only --diff-filter=U || true)"
-if [ -z "$CONFLICTS" ]; then
-    # Rebase failed without leaving unmerged paths — the log is the only clue.
-    echo "error: rebase onto $TARGET failed without reporting conflicting files." >&2
-    cat "$REBASE_LOG" >&2
+if ! git -C "$WORKTREE" rebase --onto "$TARGET" "$BASE" >"$LOG" 2>&1; then
+    CONFLICTS="$(git -C "$WORKTREE" diff --name-only --diff-filter=U || true)"
+    if [ -z "$CONFLICTS" ]; then
+        # Rebase failed without leaving unmerged paths — the log is the only clue.
+        echo "error: rebase onto $TARGET failed without reporting conflicting files." >&2
+        cat "$LOG" >&2
+        exit 1
+    fi
+
+    echo "CONFLICT: rebase onto $TARGET stopped. Conflicting files:"
+    printf '%s\n' "$CONFLICTS"
+
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Textual conflict.** The $COMMITS commits since ZED_BASE"
+        echo "(\`${BASE:0:10}\`) do not replay cleanly onto \`$TARGET\`."
+        echo
+        echo "Conflicting files:"
+        echo
+        printf '%s\n' "$CONFLICTS" | while read -r file; do
+            printf -- '- `%s`\n' "$file"
+        done
+    } | summary
+
     exit 1
 fi
 
-echo "CONFLICT: rebase onto $TARGET stopped. Conflicting files:"
-printf '%s\n' "$CONFLICTS"
+REPLAYED="rebases cleanly onto $TARGET ($COMMITS commits replayed)"
+
+if [ "$SEMANTIC" != "1" ]; then
+    echo "$REPLAYED"
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Clean.** $REPLAYED"
+    } | summary
+    exit 0
+fi
+
+if [ -z "${CARGO_TARGET_DIR:-}" ]; then
+    OWNED_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/lexed-rebase-check-target.XXXXXX")"
+    export CARGO_TARGET_DIR="$OWNED_TARGET_DIR"
+fi
+
+echo "$REPLAYED; running cargo check --workspace on the rebased tree"
+
+if (cd "$WORKTREE" && cargo check --workspace 2>&1) | tee "$LOG"; then
+    echo "$REPLAYED, and cargo check passes"
+    {
+        echo "## Rebase canary"
+        echo
+        echo "**Clean.** $REPLAYED, and \`cargo check --workspace\` passes on the"
+        echo "rebased tree."
+    } | summary
+    exit 0
+fi
+
+echo "SEMANTIC DRIFT: $REPLAYED, but cargo check --workspace fails on the rebased tree."
 
 {
     echo "## Rebase canary"
     echo
-    echo "CONFLICT: $COMMITS commits since ZED_BASE (\`${BASE:0:10}\`) do not replay"
-    echo "cleanly onto \`$TARGET\`."
+    echo "**Semantic drift.** The $COMMITS commits since ZED_BASE"
+    echo "(\`${BASE:0:10}\`) replay onto \`$TARGET\` without a textual conflict,"
+    echo "but \`cargo check --workspace\` fails on the result — upstream changed"
+    echo "something the fork's code depends on in a way git cannot see."
     echo
-    echo "Conflicting files:"
-    echo
-    printf '%s\n' "$CONFLICTS" | while read -r file; do
-        printf -- '- `%s`\n' "$file"
-    done
+    echo '```'
+    tail -n 50 "$LOG"
+    echo '```'
 } | summary
 
-exit 1
+exit 3

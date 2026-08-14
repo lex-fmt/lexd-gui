@@ -238,11 +238,13 @@ https://github.com/zed-industries/zed main`. Full history is not optional —
    worktree, where `<target>` is upstream `main` for the weekly canary
    (fork-strategy's actual rebase cadence is quarterly onto stable tags; the
    weekly run is early conflict radar, not the rebase itself).
-3. Clean completion → green, write "rebases cleanly onto <sha>" to the step
+3. On a clean replay, run `cargo check --workspace` on the rebased tree — see
+   "Semantic drift" below.
+4. Clean completion → green, write "rebases cleanly onto <sha>" to the step
    summary. Conflict → `git rebase --abort` after writing the conflicting
    file list to `$GITHUB_STEP_SUMMARY`, exit 1. A red weekly run is the
    signal that spawns an agent session while the conflict is still small.
-4. `permissions: contents: read`; no issue creation, no notifications
+5. `permissions: contents: read`; no issue creation, no notifications
    machinery — the failed-run email/badge is enough to start with.
 
 **All of the logic lives in `script/lexed-rebase-check`, not the workflow.** A
@@ -255,8 +257,43 @@ and any fetched ref exercises the real path. It replays inside a detached
 `git worktree` under `mktemp -d`, aborts the rebase and removes the worktree
 from an `EXIT` trap, and falls back to a `github-actions[bot]` committer ident
 only when the environment has none — so a developer running it never has their
-branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 conflict,
-2 misconfiguration (matching `lexed-diff-guard`).
+branch, working tree, or git config disturbed. Exit codes: 0 clean, 1 textual
+conflict, 2 misconfiguration (matching `lexed-diff-guard`), 3 semantic drift.
+
+### Semantic drift
+
+A textually clean rebase can still be a broken tree. Git reports a conflict
+only when the same lines move on both sides; upstream renaming a function the
+`lex_*` crates call, or changing a trait the fork implements, touches lines the
+fork never edited and replays silently. That failure mode is exactly the one
+the quarterly rebase most needs warning about, and it is invisible to `git`.
+
+So after a clean replay the canary runs `cargo check --workspace` on the
+rebased tree and exits 3 when it errors, with the last 50 lines of cargo output
+in the step summary. The three outcomes are distinguishable at a glance: a
+textual conflict names the conflicting files, semantic drift shows the compiler
+error, clean says so.
+
+`--semantic` gates it (or `LEXED_REBASE_SEMANTIC=1`); the workflow passes the
+flag, and a bare local run stays the seconds-long textual rehearsal. The check
+honors `CARGO_TARGET_DIR` when the caller sets one — useful locally, where
+borrowing a warm target directory turns a cold workspace build into a short
+one — and otherwise mints a throwaway under `TMPDIR` that the `EXIT` trap
+removes. It never writes into the caller's checkout. The trap only deletes a
+target directory the script created; one handed in through the environment
+belongs to the caller.
+
+CI cost is the reason the job carries `timeout-minutes: 90`, the disk reclaim
+step, and `setup-sccache` wired exactly as `lexed_checks.yml` does it. The
+throwaway worktree's target directory is new every week, so `Swatinem/rust-cache`
+has nothing to restore; sccache's shared bucket is what makes the run tractable,
+because the replayed tree is upstream's code plus the fork's and nearly every
+compilation unit is byte-identical to one another job already compiled. Not
+included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
+building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`
+copy (its `-D warnings` would turn upstream's warnings into canary failures,
+and the parent-directory trick does not reach a worktree living outside the
+checkout anyway).
 
 ## Sequencing
 

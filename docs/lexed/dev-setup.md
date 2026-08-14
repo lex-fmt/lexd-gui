@@ -84,9 +84,31 @@ git fetch https://github.com/zed-industries/zed main
 script/lexed-rebase-check FETCH_HEAD
 ```
 
+Run those two together. `FETCH_HEAD` is whatever the last fetch of _any_ remote
+left behind, and the pre-push hooks fetch `origin` — so a stale `FETCH_HEAD`
+will happily rebase the fork onto the fork's own `main` and report a pile of
+meaningless conflicts. The script prints the target commit's sha, date, and
+subject before it starts; if that line does not look like upstream Zed, refetch.
+
 The replay happens in a throwaway detached worktree, so your branch, working
 tree, and git config are untouched either way. Exit 1 means conflict, and the
 conflicting files are printed.
+
+That bare run is textual only and takes about two seconds. Upstream can also
+break the fork without touching a line the fork edited — renaming a function
+the `lex_*` crates call conflicts with nothing and replays silently — so
+`--semantic` adds a `cargo check --workspace` on the rebased tree and exits 3
+when it fails. That build is workspace-sized, which is why it is opt-in. It is
+what CI runs weekly:
+
+```sh
+script/lexed-rebase-check --semantic FETCH_HEAD
+```
+
+By default the check builds into a throwaway target directory that is deleted
+afterward, so nothing lands in your checkout. Set `CARGO_TARGET_DIR` to borrow
+a warm one and turn a cold workspace build into a short one — the script never
+deletes a target directory you handed it.
 
 ## Agent sessions
 

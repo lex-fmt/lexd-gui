@@ -12,6 +12,13 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  CC: clang
+  CXX: clang++
+
 defaults:
   run:
     shell: bash -euxo pipefail {0}
@@ -20,7 +27,7 @@ jobs:
   rebase_check:
     name: Rebase onto upstream main
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       # Full history: the replay needs every commit back to ZED_BASE, and
       # ZED_BASE is an upstream commit, so the fork's history reaches all the
@@ -30,8 +37,40 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The semantic check builds a workspace-sized target directory in
+      # RUNNER_TEMP, on the same volume as everything else.
+      - name: Reclaim runner disk space
+        run: ./script/lexed-ci-reclaim-disk
+
       - name: Fetch upstream main
         run: git fetch https://github.com/zed-industries/zed main
 
+      # The replayed tree is upstream's code plus the fork's, so almost every
+      # compilation unit is byte-identical to one some other job already
+      # compiled. That shared bucket is the only thing standing between this
+      # job and a full cold build every Monday — rust-cache would not help,
+      # since the throwaway worktree's target directory is new each run.
+      # No-ops when the secret is absent.
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
+
+      - name: Install Linux dependencies
+        run: ./script/linux
+
+      # CARGO_TARGET_DIR is set explicitly so the build cannot land in the
+      # checkout: the script would otherwise mint its own under TMPDIR, and
+      # pinning it here keeps the location visible to anyone reading the log.
       - name: Rehearse the rebase
-        run: ./script/lexed-rebase-check FETCH_HEAD
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/rebase-check-target
+        run: ./script/lexed-rebase-check --semantic FETCH_HEAD
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Disk usage
+        if: always()
+        run: df -h
