@@ -125,6 +125,15 @@ a clone runs without them. The root `AGENTS.md` therefore also tells agents to
 run the script, which covers that first session and any agent with no hook
 mechanism at all.
 
+## Release secrets
+
+The macOS signing and notarization secrets live in Doppler (project `github`,
+config `prd`) and are pushed to the repo with `script/lexed-secrets-sync` —
+run it after a credential rotates. It needs an ambient `doppler login` and a
+`gh` login with admin rights on the repo; `--dry-run` prints the mapping
+without touching either side. The table it syncs is documented in
+[ci-plan.md §4](ci-plan.md#4-secrets-doppler--github).
+
 ## Bypassing
 
 `git commit --no-verify` and `git push --no-verify` skip the hooks. Reach for

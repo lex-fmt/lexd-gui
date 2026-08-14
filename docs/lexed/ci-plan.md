@@ -198,29 +198,50 @@ auto-updater endpoints; nightly channel.
 ## 4. Secrets: Doppler → GitHub
 
 Keep `bundle-mac`'s existing env names as the GitHub secret names (no script
-churn), map from Doppler keys in one place. New `script/lexed-secrets-sync`
-(~60 lines, modeled on shipit's resolver, minus its machinery):
+churn), map from Doppler keys in one place. `script/lexed-secrets-sync` holds
+that map and pushes the values; the table in the script is the source of truth
+and this one mirrors it. Doppler project `github`, config `prd`:
 
-- Reads a small table in the script (or `script/lexed-secrets.toml`):
-  gh-secret-name → doppler key, e.g.
-
-  | GitHub secret                  | Contents                               |
-  | ------------------------------ | -------------------------------------- |
-  | `MACOS_CERTIFICATE`            | base64 Developer ID Application `.p12` |
-  | `MACOS_CERTIFICATE_PASSWORD`   | p12 password (empty is a valid value)  |
-  | `APPLE_NOTARIZATION_KEY`       | App Store Connect `.p8` contents       |
-  | `APPLE_NOTARIZATION_KEY_ID`    | ASC key id                             |
-  | `APPLE_NOTARIZATION_ISSUER_ID` | ASC issuer UUID                        |
+| GitHub secret                 | Doppler key                    | Contents                                       |
+| ----------------------------- | ------------------------------ | ---------------------------------------------- |
+| `MACOS_CERTIFICATE`           | `APPLE_CERTIFICATE_P12_BASE64` | base64 Developer ID Application `.p12`         |
+| `MACOS_CERTIFICATE_PASSWORD`  | `APPLE_CERTIFICATE_PASSWORD`   | passphrase for that `.p12`                     |
+| `APPLE_NOTARIZATION_APPLE_ID` | `APPLE_ID`                     | Apple ID e-mail `notarytool` submits as        |
+| `APPLE_NOTARIZATION_PASSWORD` | `APPLE_APP_SPECIFIC_PASSWORD`  | app-specific password (`xxxx-xxxx-xxxx-xxxx`)  |
+| `APPLE_NOTARIZATION_TEAM_ID`  | `APPLE_TEAM_ID`                | 10-char Apple team id                          |
+| `SCCACHE_GCS_KEY`             | `SCCACHE_GCS_KEY`              | GCS service-account JSON for the sccache layer |
 
 - Resolves each via `doppler secrets get <KEY> --plain --project <p> --config
 <c>` (ambient `doppler login`, no token handling), pushes via
   `gh secret set NAME --repo lex-fmt/lexd-gui` **with the value on stdin,
   never argv**. `--dry-run` prints names only. One-line-per-secret output,
-  `N set / N failed` summary, exit 1 on any failure.
-- Prerequisite (human): create the Lexed Apple identities — Developer ID
-  Application cert for the Lexed team, ASC API key — and load them into
-  Doppler. Export the p12 with `openssl pkcs12 -export -legacy` if anything
-  non-Apple will ever read it (OpenSSL 3 default export breaks rcodesign).
+  `N set / N failed` summary, exit 1 on any failure. `--plain` appends a
+  trailing newline that the script strips — a team id or app-specific password
+  pushed with it attached fails every comparison downstream.
+- Doppler carries two exact-duplicate pairs (`APPLE_CERTIFICATE` ==
+  `APPLE_CERTIFICATE_P12_BASE64`, `APPLE_PASSWORD` ==
+  `APPLE_APP_SPECIFIC_PASSWORD`). The explicitly named key of each pair is
+  mapped; the aliases are ignored.
+- **Notarization authenticates as an Apple ID**, not with an App Store Connect
+  API key — no ASC key exists in Doppler, so `notarytool` runs with
+  `--apple-id --password --team-id`. Phase 4 consequence: `bundle-mac` gates
+  its whole signing path on `APPLE_NOTARIZATION_KEY` / `_KEY_ID` /
+  `_ISSUER_ID` all being set, so with this secret set it silently takes the
+  unsigned ad-hoc path — teaching it the Apple-ID form is a prerequisite for
+  the sign job, not a polish item. ASC keys remain the preferred path
+  (revocable on their own, no 2FA coupling to a human's Apple ID); when they
+  are minted, add them to the table and have the sign step prefer them when
+  both are present.
+- Doppler also holds `APPLE_SIGNING_IDENTITY`, the identity string
+  `codesign -s` wants. It is deliberately **not** synced to GitHub — Phase 4
+  should carry it as a workflow env var rather than mint a secret for what is
+  public certificate metadata. It matches the certificate currently in
+  Doppler, whose team id agrees with `APPLE_TEAM_ID` and which is valid
+  through April 2031.
+- Prerequisite (human): `doppler login`, plus `gh auth` with admin rights on
+  the repo. Export any future p12 with `openssl pkcs12 -export -legacy` if
+  anything non-Apple will ever read it (OpenSSL 3 default export breaks
+  rcodesign).
 
 ## 5. Scheduled rebase canary: `lexed_rebase_check.yml`
 
