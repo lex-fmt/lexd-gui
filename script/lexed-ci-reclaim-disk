@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+
+# Free disk space on a GitHub-hosted Linux runner by deleting preinstalled
+# toolchains this repo never uses. Measured on ubuntu-24.04: the image leaves
+# about 115 GB free on a 145 GB volume, and a nextest run of this workspace
+# builds a 75 GB target directory, finishing at 94% full. The removals below
+# buy back roughly 30 GB, which is the margin between that and a job that
+# dies on ENOSPC partway through linking.
+
+set -euxo pipefail
+
+sudo rm -rf \
+    /usr/local/lib/android \
+    /usr/share/dotnet \
+    /usr/share/swift \
+    /usr/local/share/boost \
+    /usr/local/share/powershell \
+    /usr/local/.ghcup \
+    /opt/ghc \
+    /opt/hostedtoolcache/CodeQL \
+    /opt/hostedtoolcache/go
+
+sudo docker image prune --all --force || true
+
+df -h

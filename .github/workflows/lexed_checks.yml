@@ -112,6 +112,12 @@ jobs:
         with:
           fetch-depth: 350
 
+      # Only this job needs it. Clippy's target directory measures 5.7 GB;
+      # building every test binary in the workspace produces 75 GB, which
+      # leaves under 9 GB spare on a stock runner.
+      - name: Reclaim runner disk space
+        run: ./script/lexed-ci-reclaim-disk
+
       - name: Set up CI cargo config
         run: |
           mkdir -p ./../.cargo
