@@ -125,14 +125,14 @@ check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
 not the filterset will run it: ~75 GB of target directory and 18-33 minutes,
 against the ~37 seconds of execution the filterset actually saves. A pull
 request touching no crates still spent 22 min 38 s in the tests job to run the
-90 tests its filterset selected, out of 8141. The obvious
-fix is to drop `--workspace -E ...` for `-p <reverse-dependency closure of the
-changed crates>` so that cargo builds only what the closure needs. That was
-built and measured, and it must not be adopted. `script/lexed-test-scope-probe`
+90 tests its filterset selected out of 8141. The obvious fix is to drop
+`--workspace -E ...` for `-p <reverse-dependency closure of the changed
+crates>` so that cargo builds only what the closure needs. That was built and
+measured, and it must not be adopted. `script/lexed-test-scope-probe`
 reproduces the measurement.
 
 The prize was real: a pull request touching only the `lex_*` crates has a
-closure of 3 members and 4 test binaries, against 267 workspace-wide. It is
+closure of 3 members and 3 test binaries, against 264 workspace-wide. It is
 still not worth taking.
 
 Cargo resolves features across exactly the packages it was asked to build.
@@ -194,7 +194,7 @@ and `-p lex_preview -p lex_bundled_extensions -p zed` produce byte-identical
 lists of the same 90 test IDs — one from 264 test binaries, the other from 3.
 That identity is the hazard rather than the reassurance: no counts change, no
 summary changes, and nothing a reviewer could read would reveal that the code
-under those 90 tests had.
+those 90 tests exercise had changed underneath them.
 
 The artifacts do not transfer either, which is the same fact from the other
 side. Pointing a fully warm full-workspace target at the closure recompiled 47
