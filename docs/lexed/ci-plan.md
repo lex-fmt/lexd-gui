@@ -242,17 +242,17 @@ The token's config, Doppler project `lexd-gui-ci` config `prd`, holds nine
 secrets and nothing else. Each is a **cross-project secret reference** of the
 form `${github.prd.KEY}`, so there is one copy of every value and no drift:
 
-| CI-facing name                  | References                                |
-| ------------------------------- | ----------------------------------------- |
-| `MACOS_CERTIFICATE`             | `github.prd.APPLE_CERTIFICATE_P12_BASE64` |
-| `MACOS_CERTIFICATE_PASSWORD`    | `github.prd.APPLE_CERTIFICATE_PASSWORD`   |
-| `APPLE_SIGNING_IDENTITY`        | `github.prd.APPLE_SIGNING_IDENTITY`       |
-| `APPLE_NOTARIZATION_KEY_BASE64` | `github.prd.ASC_API_KEY_BASE64`           |
-| `APPLE_NOTARIZATION_KEY_ID`     | `github.prd.ASC_API_KEY_ID`               |
-| `APPLE_NOTARIZATION_ISSUER_ID`  | `github.prd.ASC_API_ISSUER_ID`            |
-| `APPLE_NOTARIZATION_APPLE_ID`   | `github.prd.APPLE_ID`                     |
-| `APPLE_NOTARIZATION_PASSWORD`   | `github.prd.APPLE_APP_SPECIFIC_PASSWORD`  |
-| `APPLE_NOTARIZATION_TEAM_ID`    | `github.prd.APPLE_TEAM_ID`                |
+| CI-facing name                  | References                                       |
+| ------------------------------- | ------------------------------------------------ |
+| `MACOS_CERTIFICATE`             | `github.prd.APPLE_CERTIFICATE_P12_LEGACY_BASE64` |
+| `MACOS_CERTIFICATE_PASSWORD`    | `github.prd.APPLE_CERTIFICATE_PASSWORD`          |
+| `APPLE_SIGNING_IDENTITY`        | `github.prd.APPLE_SIGNING_IDENTITY`              |
+| `APPLE_NOTARIZATION_KEY_BASE64` | `github.prd.ASC_API_KEY_BASE64`                  |
+| `APPLE_NOTARIZATION_KEY_ID`     | `github.prd.ASC_API_KEY_ID`                      |
+| `APPLE_NOTARIZATION_ISSUER_ID`  | `github.prd.ASC_API_ISSUER_ID`                   |
+| `APPLE_NOTARIZATION_APPLE_ID`   | `github.prd.APPLE_ID`                            |
+| `APPLE_NOTARIZATION_PASSWORD`   | `github.prd.APPLE_APP_SPECIFIC_PASSWORD`         |
+| `APPLE_NOTARIZATION_TEAM_ID`    | `github.prd.APPLE_TEAM_ID`                       |
 
 - **A separate project, not a branch config.** The obvious move —
   `github/prd_gh_lexd` — is wrong: a Doppler branch config inherits its
@@ -290,10 +290,18 @@ form `${github.prd.KEY}`, so there is one copy of every value and no drift:
 secret set NAME --repo lex-fmt/lexd-gui` **with the value on stdin, never
   argv**. `--plain` appends a trailing newline that the script strips — a token
   pushed with it attached fails every comparison downstream.
+- **The p12 must be a legacy export.** `APPLE_CERTIFICATE_P12_BASE64` was
+  written by OpenSSL 3 with its modern defaults (PBES2 / AES-256-CBC, MAC
+  sha256). `openssl` reads it back happily; macOS `security import` does not,
+  and the way it says so is `MAC verification failed during PKCS12 import
+(wrong password?)` — a message that sends you looking for a password problem
+  that does not exist. `github/prd` therefore also carries
+  `APPLE_CERTIFICATE_P12_LEGACY_BASE64`, the same certificate re-exported with
+  `openssl pkcs12 -export -legacy` (PBE-SHA1-RC2-40, MAC sha1), and that is
+  what CI references. Export any future p12 that way from the start: the same
+  format is what `rcodesign` wants if Linux-hosted signing ever lands.
 - Prerequisite (human): `doppler login`, plus `gh auth` with admin rights on
-  the repo. Export any future p12 with `openssl pkcs12 -export -legacy` if
-  anything non-Apple will ever read it (OpenSSL 3 default export breaks
-  rcodesign). The certificate now in Doppler is valid through April 2031.
+  the repo. The certificate now in Doppler is valid through April 2031.
 
 ## 5. Scheduled rebase canary: `lexed_rebase_check.yml`
 
