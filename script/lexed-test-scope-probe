@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+# Measure what would change if the tests job scoped compilation — building
+# `-p <reverse-dependency closure of the changed crates>` instead of the whole
+# workspace — rather than only scoping execution with a nextest filterset.
+#
+# Usage: script/lexed-test-scope-probe PACKAGE...
+#   PACKAGE...: the crates a hypothetical pull request changes.
+#
+# Cargo resolves features across exactly the packages it was asked to build, so
+# the two invocations do not compile the same code. This prints the closure and
+# every package both builds produce with a different feature set. Exit status is
+# 1 when anything diverges.
+#
+# docs/lexed/ci-plan.md §2 records the decision this script produced: the
+# divergence is real, unavoidable, and changes what the tests exercise, so the
+# filterset stays and compilation is not scoped.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+[ "$#" -gt 0 ] || {
+    echo "usage: script/lexed-test-scope-probe PACKAGE..." >&2
+    exit 2
+}
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+metadata="$(cargo metadata --format-version=1 --no-deps)"
+members="$(echo "$metadata" | jq -r '.packages[].name')"
+
+# One "dependency<TAB>dependent" line per edge between two workspace members,
+# across every dependency kind: a crate's tests are built from its dev
+# dependencies too. Edges are matched by package name alone, so a registry
+# crate sharing a member's name would add a spurious edge — which only ever
+# widens the closure.
+echo "$metadata" | jq -r '
+    ([.packages[].name] | map({key: ., value: true}) | from_entries) as $members
+    | .packages[]
+    | . as $package
+    | .dependencies[]
+    | select($members[.name])
+    | "\(.name)\t\($package.name)"
+' >"$work/edges"
+
+printf '%s\n' "$@" >"$work/seeds"
+awk '
+    FNR == NR {
+        if ($0 != "" && !($0 in reached)) {
+            reached[$0] = 1
+            queue[++tail] = $0
+        }
+        next
+    }
+    { dependents[$1] = dependents[$1] " " $2 }
+    END {
+        head = 1
+        while (head <= tail) {
+            count = split(dependents[queue[head++]], dependent, " ")
+            for (i = 1; i <= count; i++)
+                if (dependent[i] != "" && !(dependent[i] in reached)) {
+                    reached[dependent[i]] = 1
+                    queue[++tail] = dependent[i]
+                }
+        }
+        for (package in reached) print package
+    }
+' "$work/seeds" "$work/edges" | sort >"$work/closure"
+
+package_args=()
+while read -r package; do
+    package_args+=(-p "$package")
+done <"$work/closure"
+
+echo "seeds:            $*"
+echo "closure:          $(wc -l <"$work/closure" | tr -d ' ') of $(echo "$members" | wc -l | tr -d ' ') workspace members"
+echo
+
+# The local path and cargo tree's "already shown" marker are presentation, not
+# resolution. Resolver v2 can compile one package twice with different features
+# — once as a build dependency, once as a normal one — so a package legitimately
+# has a set of feature sets, which sort -u collects.
+features() {
+    cargo tree --edges normal,build,dev,features --prefix none --format '{p}|{f}' "$@" |
+        sed -e 's/ (\/[^)]*)//' -e 's/ (\*)$//' |
+        sort -u
+}
+
+features --workspace >"$work/workspace.txt"
+features "${package_args[@]}" >"$work/closure-features.txt"
+
+# Divergence in a workspace member matters most: Zed's `test-support` features
+# and gpui's `font-kit` live there, and both swap behaviour rather than adding
+# APIs.
+awk -F'|' -v members="$(echo "$members" | paste -sd ' ' -)" '
+    BEGIN {
+        count = split(members, member, " ")
+        for (i = 1; i <= count; i++) is_member[member[i]] = 1
+    }
+    FNR == NR { workspace[$1] = workspace[$1] " / " $2; next }
+    { closure[$1] = closure[$1] " / " $2 }
+    END {
+        for (package in closure) {
+            if (!(package in workspace)) continue
+            shared++
+            if (workspace[package] == closure[package]) continue
+            split(package, field, " ")
+            kind = is_member[field[1]] ? "member" : "third-party"
+            if (kind == "member") diverged_members++
+            else diverged_third_party++
+            print kind ": " package
+            print "  workspace:" workspace[package]
+            print "  closure:  " closure[package]
+        }
+        for (package in workspace)
+            if (!(package in closure)) skipped++
+        print ""
+        print "built by both builds:                            " shared+0
+        print "built only by the full workspace:                " skipped+0
+        print "workspace members resolving different features:  " diverged_members+0
+        print "third-party crates resolving different features: " diverged_third_party+0
+        exit (diverged_members + diverged_third_party) > 0 ? 1 : 0
+    }
+' "$work/workspace.txt" "$work/closure-features.txt"
