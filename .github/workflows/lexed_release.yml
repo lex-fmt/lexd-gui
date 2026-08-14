@@ -141,7 +141,10 @@ jobs:
     name: Build (${{ matrix.arch }})
     needs: prepare
     runs-on: macos-latest
-    timeout-minutes: 120
+    # Sized for a cold run. A hosted macOS runner has a fraction of the cores a
+    # developer machine does, and the release profile shares no cached
+    # compilation units with the dev-profile jobs in lexed_checks.yml.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
