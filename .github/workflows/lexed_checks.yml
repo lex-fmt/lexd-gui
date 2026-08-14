@@ -70,14 +70,38 @@ jobs:
 
       # Zed's CI-only `-D warnings` trick: cargo merges a config placed in a
       # parent directory of the workspace, so the checkout itself stays clean.
+      # The mold selection rides along in the same file for the same reason —
+      # `.cargo/ci-config.toml` is upstream-owned and stays untouched.
       - name: Set up CI cargo config
         run: |
           mkdir -p ./../.cargo
           cp ./.cargo/ci-config.toml ./../.cargo/config.toml
 
+      - name: Install mold and select it as the linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
+          {
+            echo
+            echo "[target.x86_64-unknown-linux-gnu]"
+            echo 'rustflags = ["-C", "link-arg=-fuse-ld=mold"]'
+          } >>./../.cargo/config.toml
+
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
-          key: clippy
+          key: clippy-gen1
+
+      # Complements rust-cache rather than replacing it: rust-cache restores
+      # this branch's whole target directory from the 10 GB branch-scoped
+      # GitHub cache, while sccache adds per-compilation-unit hits from a
+      # bucket shared across every branch and repo. That is what a cold
+      # feature branch, where rust-cache necessarily misses, has to fall back
+      # on. No-ops when the secret is absent, so fork PRs stay green.
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -92,6 +116,10 @@ jobs:
 
       - name: clippy
         run: ./script/clippy
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
 
       - name: Disk usage
         if: always()
@@ -123,9 +151,24 @@ jobs:
           mkdir -p ./../.cargo
           cp ./.cargo/ci-config.toml ./../.cargo/config.toml
 
+      - name: Install mold and select it as the linker
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold
+          {
+            echo
+            echo "[target.x86_64-unknown-linux-gnu]"
+            echo 'rustflags = ["-C", "link-arg=-fuse-ld=mold"]'
+          } >>./../.cargo/config.toml
+
       - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
         with:
-          key: tests
+          key: tests-gen1
+
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
 
       - name: Install Linux dependencies
         run: ./script/linux
@@ -174,6 +217,10 @@ jobs:
           else
             cargo nextest run --workspace --no-fail-fast --no-tests=warn
           fi
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
 
       - name: Disk usage
         if: always()
