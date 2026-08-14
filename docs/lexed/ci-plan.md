@@ -119,6 +119,31 @@ check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
   `script/check-licenses` then `script/generate-licenses`. Pre-verify the
   `lex_*` crates carry the `LICENSE-GPL` symlinks the checker demands.
 
+### Excluded tests, and the runner ceiling
+
+The first full-workspace run on a push to `main` failed 36 tests, and **20 of
+them were this fork's own doing**: `assets/settings/default.json` is both the
+product configuration and the fixture upstream's tests assert against, so
+turning off `auto_update`, telemetry and edit predictions broke the tests that
+exercise them. `.config/nextest.toml` is upstream-owned, so the exclusions live
+in `lexed_checks.yml`, one test per entry with its reason beside it. Read that
+list before adding to it; each line is coverage given up on purpose.
+
+Seventeen of those twenty should not stay excluded. They all reach the defaults
+through `SettingsStore::test()`, so adding the upstream values to the override
+block `test_settings()` already merges recovers every one — verified at 160/160
+across the affected packages. It costs one new upstream file and the last
+diff-guard slot, which is why it has not been spent yet.
+
+Separately, and not caused by the fork: **the suite is at the edge of what a
+4-core hosted runner can finish inside the 60-second per-test timeout.**
+`worktree::test_random_worktree_changes` took 54s of its 60s budget on the run
+that passed, and two later runs of the same code came in ~50% slower overall and
+timed it out. `.config/nextest.toml` cannot be edited from the fork side and
+nextest has no command-line override for the timeout, so the levers are larger
+runners, fewer test threads, or exclusions. Treat a green full suite as
+provisional until that is settled.
+
 ### Why compilation stays unscoped
 
 `--workspace` compiles and links every test binary in the workspace whether or
