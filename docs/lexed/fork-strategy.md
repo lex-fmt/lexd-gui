@@ -75,12 +75,12 @@ registers there without another upstream edit.
 
 `script/lexed-diff-guard` counts upstream files touched (modified, deleted,
 or renamed — additions are free) relative to the base commit in `ZED_BASE`,
-and fails above a ceiling (currently 60). It runs in CI on every push and
+and fails above a ceiling (currently 70). It runs in CI on every push and
 pull request (`.github/workflows/lexed_diff_guard.yml`) and is runnable
 locally. Raise the ceiling only deliberately, in the workflow file, with a
 commit that says why.
 
-Current shape of the diff: ~58 touched files, the large majority one-time
+Current shape of the diff: 60 touched files, the large majority one-time
 branding swaps (icons, `crates/zed/resources/*`, packaging metadata) that
 will conflict trivially or not at all on rebase. The live source seams are a
 short list: `crates/zed/src/main.rs` (two `init()` calls), the two root

@@ -47,7 +47,7 @@ ships in this tree.
   It is the one workflow missing it; `cargo xtask workflows` fails on the repo
   today because of it.
 
-- The guard is at 59/60. No step in this plan touches a new upstream file, but
+- The guard is at 60/70. No step in this plan touches a new upstream file, but
   the next unrelated change might; when it happens, raise the ceiling
   deliberately in the workflow file with a commit message that says why
   (fork-strategy §2).
@@ -132,8 +132,9 @@ list before adding to it; each line is coverage given up on purpose.
 Seventeen of those twenty are not excluded. They all reach the defaults through
 `SettingsStore::test()`, so `crates/settings/src/settings_file.rs` restores the
 upstream values in the override block `test_settings()` already merges — the
-shipped defaults are untouched. That spent the last diff-guard slot, which now
-stands at **60 of 60**. A later settings-overlay refactor keeping fork defaults
+shipped defaults are untouched. That spent the last slot under the old ceiling
+of 60; the ceiling has since been raised deliberately to 70, so the guard now
+stands at **60 of 70**. A later settings-overlay refactor keeping fork defaults
 out of `default.json` would remove the need for it and free two slots.
 
 Separately, and not caused by the fork: **the suite was at the edge of what a

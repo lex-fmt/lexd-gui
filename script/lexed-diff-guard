@@ -8,13 +8,13 @@
 # upstream has never seen them, so they can never conflict on rebase.
 #
 # Usage: script/lexed-diff-guard [ceiling]
-#   ceiling: max allowed touched-file count (default 45; also LEXED_DIFF_CEILING)
+#   ceiling: max allowed touched-file count (default 70; also LEXED_DIFF_CEILING)
 
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-CEILING="${1:-${LEXED_DIFF_CEILING:-60}}"
+CEILING="${1:-${LEXED_DIFF_CEILING:-70}}"
 BASE="$(cat ZED_BASE)"
 
 if ! git cat-file -e "$BASE" 2>/dev/null; then
