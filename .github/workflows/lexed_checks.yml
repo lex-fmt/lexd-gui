@@ -206,7 +206,7 @@ jobs:
       - id: scope
         name: Compute test scope
         run: |
-          if true || [ -z "${GITHUB_BASE_REF:-}" ]; then
+          if [ -z "${GITHUB_BASE_REF:-}" ]; then
             echo "push build: running the full workspace"
             echo "filterset=" >>"$GITHUB_OUTPUT"
             exit 0
@@ -226,37 +226,6 @@ jobs:
 
       - name: Limit target directory size
         run: ./script/clear-target-dir-if-larger-than 350 200
-
-      # TEMPORARY: equivalence proof for the exclusion move. Lists the tests
-      # the old shell array selected and the tests the policy layer selects,
-      # and fails if they differ. Reverted in the next commit.
-      - name: TEMPORARY equivalence proof
-        run: |
-          old_exclusions=(
-            'package(auto_update) and test(=tests::test_auto_update_defaults_to_true)'
-            'package(auto_update) and test(=tests::test_auto_update_downloads)'
-            'package(settings) and test(=settings_store::tests::test_settings_store_basic)'
-            'package(collab) and test(/_postgres$/)'
-            'package(language) and test(=buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks)'
-            'package(extension_host) and test(=extension_store_test::test_extension_store_with_test_extension)'
-          )
-          excluded="$(printf '%s or ' "${old_exclusions[@]}")"
-          excluded="not (${excluded% or })"
-          echo "old expression: ${excluded}"
-          cargo nextest list --workspace -E "${excluded}" >/tmp/tests-old.txt
-          cargo nextest list --workspace \
-            --tool-config-file "lexed:${GITHUB_WORKSPACE}/.config/lexed-nextest.toml" \
-            >/tmp/tests-new.txt
-          echo "old: $(grep -c . /tmp/tests-old.txt) lines, new: $(grep -c . /tmp/tests-new.txt) lines"
-          if diff -u /tmp/tests-old.txt /tmp/tests-new.txt; then
-            echo "EQUIVALENT: the policy layer selects exactly the old test set."
-          else
-            echo "DIVERGED: the policy layer does not match the old shell array." >&2
-            exit 1
-          fi
-          # And the count actually excluded, against a run with no policy.
-          cargo nextest list --workspace >/tmp/tests-none.txt
-          echo "excluded by policy: $(( $(grep -c . /tmp/tests-none.txt) - $(grep -c . /tmp/tests-new.txt) ))"
 
       # What runs and what does not is the fork's test policy, and it lives in
       # `.config/lexed-nextest.toml` rather than here — one file, versioned,
