@@ -251,6 +251,17 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   corresponding-source publication a launch blocker, and it costs one step
   here.
 
+  **Download the artifacts into `release-assets/` and `release-notes/`, never
+  `assets/` or any other name the tree already uses.** `assets/` is Zed's own
+  bundled-assets directory and it is sitting in the checkout;
+  `actions/download-artifact` merges into an existing directory rather than
+  refusing, so the signed DMGs landed inside it and `gh release upload …
+assets/*` expanded to include the repo's `fonts`, `icons` and `themes`. `gh`
+  aborts the entire upload on the first directory it is handed, so the failure
+  mode is a release that exists with nothing attached. Upload regular files
+  explicitly — `find release-assets -maxdepth 1 -type f -print0 | xargs -0` —
+  rather than trusting a glob to contain only what you put there.
+
 **`script/bundle-mac` edits** (file already fork-touched — no ceiling cost),
 all landed with phase 4:
 
