@@ -1,0 +1,44 @@
+# Lexed fork: per-test slow-timeout raises, layered under the upstream config.
+#
+# `.config/nextest.toml` is upstream-owned and must not be edited (fork-strategy
+# §2), and its `[profile.default]` sets a 60s per-test budget. This file is
+# passed to nextest with `--tool-config-file`, which inserts it *below* the
+# upstream config in priority but above nextest's built-in defaults.
+#
+# That is enough, because nextest resolves each setting independently: it scans
+# matching overrides in priority order and takes the first one that actually
+# specifies the setting in question. Upstream's override for
+# `test_random_worktree_changes` sets only `priority`, so it does not answer
+# `slow-timeout`, and resolution falls through to the entry here. Verified
+# empirically before relying on it — an override in a tool config does take
+# effect over a higher-priority override that omits the setting.
+#
+# Only tests that PASS given time belong here. A test that fails for any other
+# reason gets excluded in `lexed_checks.yml` with its reason, not a larger
+# budget — see `test_extension_store_with_test_extension`, which already has a
+# 300s budget upstream and still fails, because the 60s it runs out of is its
+# own, inside the test.
+
+# All three are randomized stress tests that finish in 24-40s on a healthy
+# runner and cross 60s on a slow one. Measured on identical code, on the run
+# that went green: `test_random_worktree_changes` 40.2s,
+# `test_peers_following_each_other` 31.2s, `test_random_multibuffer` 24.6s.
+# Across three consecutive slower runners the first timed out at 60.0s on all
+# three runs, the third on two of them and the second on one.
+# `docs/lexed/ci-plan.md` records the same effect and the `--test-threads 3`
+# mitigation that no longer covers it on its own.
+#
+# 120s is three times the slowest healthy-runner measurement. Raising the budget
+# is honest here in a way an exclusion would not be: the assertions still run and
+# still have to hold, and a real hang still terminates.
+[[profile.default.overrides]]
+filter = 'package(worktree) and test(test_random_worktree_changes)'
+slow-timeout = { period = "120s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(multi_buffer) and test(test_random_multibuffer)'
+slow-timeout = { period = "120s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'package(collab) and test(test_peers_following_each_other)'
+slow-timeout = { period = "120s", terminate-after = 1 }

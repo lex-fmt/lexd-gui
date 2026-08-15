@@ -141,15 +141,41 @@ Separately, and not caused by the fork: **the suite was at the edge of what a
 4-core hosted runner can finish inside the 60-second per-test timeout.**
 `worktree::test_random_worktree_changes` took 54s of its 60s budget on the run
 that passed, and later runs of the same code came in ~50% slower and timed it
-out along with two other randomized tests. `.config/nextest.toml` cannot be
-edited from the fork side and nextest has no command-line override for the
-timeout, so the fix was `--test-threads 3` on the full-suite path — one fewer
-than the runner has cores.
+out along with two other randomized tests. The first fix was `--test-threads 3`
+on the full-suite path — one fewer than the runner has cores.
 
 That was not just a stay of execution. Leaving a core spare made the suite
 **faster**, 1371s against 1870s at four threads, because the long randomized
-tests stop fighting each other for CPU. If the suite grows enough to creep back
-toward the limit, the next lever is a larger runner, not another exclusion.
+tests stop fighting each other for CPU.
+
+It stopped being enough. Three consecutive runs in one night drew slow runners
+and timed out `test_random_worktree_changes` at 60.0s on all three,
+`test_random_multibuffer` on two and
+`following_tests::test_peers_following_each_other` on one — the same three
+tests, on code that had gone green hours earlier with
+`test_random_worktree_changes` passing in 40.2s.
+
+**The budget can in fact be raised from the fork side**, which an earlier note
+here denied. `.config/nextest.toml` is still untouchable, but nextest's
+`--tool-config-file` inserts a config layer below the repository's and above
+nextest's defaults, and nextest resolves each setting independently: it takes
+the first matching override that actually specifies the setting being asked
+for. Upstream's override for `test_random_worktree_changes` sets only
+`priority`, so `slow-timeout` falls through to the fork's layer. That layer is
+`.config/lexed-nextest.toml`, a fork-added file, and it grants those three
+tests 120s. Verified empirically before it was relied on, since the precedence
+rules alone did not settle it.
+
+A raise is only honest for a test that passes given time; the assertions still
+run and a real hang still terminates. A test that fails for any other reason
+still gets excluded with its reason — `test_extension_store_with_test_extension`
+is the case in point: upstream already grants it 300s and it still failed at
+62.5-62.8s, because the 60s it exhausts is its own, inside the test.
+
+If the suite grows enough to creep back toward the limit, the next lever is a
+larger runner rather than more exclusions. That end state stands; larger runners
+cost real money even on a public repository, so the decision sits with the
+human, and the entries above are the interim.
 
 ### A test that fails only on slow runners
 
