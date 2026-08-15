@@ -28,7 +28,45 @@
 
 set -euo pipefail
 
+# Before anything that could block. A job whose log ends at the invocation line
+# tells you nothing; a job whose log ends here tells you the script started and
+# died in its own prologue.
+echo "==> lexed-sign-mac starting"
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+
+# macOS ships no timeout(1) and a runner may not have coreutils, so this is the
+# watchdog. Every external call below that can block — on the network, on Apple,
+# or on a keychain authorization prompt that no CI runner can answer — runs
+# under it. Without one, a hang is indistinguishable from slow work until the
+# job's own timeout kills it an hour later with an empty log.
+run_with_timeout() {
+    local seconds="$1"
+    local label="$2"
+    shift 2
+
+    "$@" &
+    local command_pid=$!
+
+    (
+        sleep "$seconds"
+        kill -TERM "$command_pid" 2>/dev/null || true
+        sleep 5
+        kill -KILL "$command_pid" 2>/dev/null || true
+    ) &
+    local killer_pid=$!
+
+    local status=0
+    wait "$command_pid" || status=$?
+
+    kill -TERM "$killer_pid" 2>/dev/null || true
+    wait "$killer_pid" 2>/dev/null || true
+
+    if [ "$status" -ne 0 ]; then
+        echo "error: ${label} failed or exceeded ${seconds}s (exit ${status})." >&2
+    fi
+    return "$status"
+}
 
 output_dir=""
 remote_server_gz=""
@@ -97,7 +135,13 @@ fi
 # tearing down each other's keychain if they ever shared a host.
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/lexed-sign.XXXXXX")"
 keychain="${work_dir}/lexed-sign-$$-${RANDOM}.keychain-db"
-keychain_password="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32 || true)"
+# One command, no pipeline. The obvious idiom for this —
+# `tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32` — hung for a full hour on a
+# hosted runner: `head` exits at its byte count and the command substitution
+# then waits on a `tr` that is still reading an endless file and has not yet
+# tried the write that would earn it a SIGPIPE. It never reproduced locally,
+# which is the whole problem with it.
+keychain_password="$(openssl rand -hex 32)"
 keychain_created=false
 
 # Captured before the splice so the trap can put the search list back exactly as
@@ -167,30 +211,40 @@ mkdir -p "$output_dir"
 output_dir="$(cd "$output_dir" && pwd)"
 
 echo "==> Creating a throwaway keychain"
-security create-keychain -p "$keychain_password" "$keychain"
+run_with_timeout 120 "security create-keychain" \
+    security create-keychain -p "$keychain_password" "$keychain"
 keychain_created=true
 # Without -t there is no auto-lock timeout, so a long notarization wait cannot
 # lock the keychain out from under a later codesign.
-security set-keychain-settings "$keychain"
-security unlock-keychain -p "$keychain_password" "$keychain"
+run_with_timeout 120 "security set-keychain-settings" \
+    security set-keychain-settings "$keychain"
+run_with_timeout 120 "security unlock-keychain" \
+    security unlock-keychain -p "$keychain_password" "$keychain"
 
 printf '%s' "$MACOS_CERTIFICATE" | base64 --decode >"${work_dir}/certificate.p12"
-security import "${work_dir}/certificate.p12" -k "$keychain" \
+echo "    importing the certificate"
+run_with_timeout 120 "security import" \
+    security import "${work_dir}/certificate.p12" -k "$keychain" \
     -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
 rm -Pf "${work_dir}/certificate.p12" 2>/dev/null || rm -f "${work_dir}/certificate.p12"
 
 # Without this, codesign blocks on an interactive "allow access" prompt that no
 # CI runner can answer.
-security set-key-partition-list -S apple-tool:,apple:,codesign: \
+echo "    granting codesign access to the key"
+run_with_timeout 120 "security set-key-partition-list" \
+    security set-key-partition-list -S apple-tool:,apple:,codesign: \
     -s -k "$keychain_password" "$keychain" >/dev/null
 
 # The splice is the step people leave out. Creating a keychain does not put it in
 # the search list, and an identity in an unsearched keychain is an identity
 # codesign cannot find.
+echo "    splicing into the keychain search list"
 if [ ${#original_keychains[@]} -gt 0 ]; then
-    security list-keychains -d user -s "${original_keychains[@]}" "$keychain" >/dev/null
+    run_with_timeout 60 "security list-keychains" \
+        security list-keychains -d user -s "${original_keychains[@]}" "$keychain" >/dev/null
 else
-    security list-keychains -d user -s "$keychain" >/dev/null
+    run_with_timeout 60 "security list-keychains" \
+        security list-keychains -d user -s "$keychain" >/dev/null
 fi
 
 echo "==> Signing (nested first, bundle last)"
@@ -200,7 +254,9 @@ echo "==> Signing (nested first, bundle last)"
 sign() {
     local path="$1"
     shift
-    /usr/bin/codesign --force --timestamp --options runtime \
+    # codesign contacts Apple's timestamp authority, so this is a network call.
+    run_with_timeout 600 "codesign ${path##*/}" \
+        /usr/bin/codesign --force --timestamp --options runtime \
         --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$@" "$path" -v
 }
 
@@ -210,7 +266,8 @@ sign "${main_binary}" --entitlements "$entitlements"
 sign "${app_path}" --entitlements "$entitlements"
 
 echo "==> Verifying the signed bundle"
-/usr/bin/codesign --verify --strict --deep --verbose=2 "${app_path}"
+run_with_timeout 600 "codesign --verify" \
+    /usr/bin/codesign --verify --strict --deep --verbose=2 "${app_path}"
 if [ -x "${repo_root}/script/verify-macos-document-icon" ]; then
     "${repo_root}/script/verify-macos-document-icon" "${app_path}"
 fi
@@ -236,14 +293,16 @@ dmg_path="${work_dir}/Lexed-${arch_suffix}.dmg"
 mkdir -p "$dmg_source"
 mv "$app_path" "$dmg_source"
 ln -s /Applications "${dmg_source}/Applications"
-hdiutil create -volname Lexed -srcfolder "$dmg_source" -ov -format UDZO "$dmg_path"
+run_with_timeout 900 "hdiutil create" \
+    hdiutil create -volname Lexed -srcfolder "$dmg_source" -ov -format UDZO "$dmg_path"
 
-/usr/bin/codesign --force --timestamp --options runtime \
+run_with_timeout 600 "codesign the dmg" \
+    /usr/bin/codesign --force --timestamp --options runtime \
     --keychain "$keychain" --sign "$APPLE_SIGNING_IDENTITY" "$dmg_path" -v
 
 echo "==> Notarizing (${notary_auth})"
 notary_log="${work_dir}/notarytool.json"
-notary_args=(submit --wait --timeout 30m --output-format json "$dmg_path")
+notary_args=(submit --wait --timeout 15m --output-format json "$dmg_path")
 if [ "$notary_auth" = "asc" ]; then
     printf '%s' "$APPLE_NOTARIZATION_KEY_BASE64" | base64 --decode >"${work_dir}/asc-key.p8"
     notary_args+=(--key "${work_dir}/asc-key.p8"
@@ -257,7 +316,11 @@ fi
 
 notary_status=0
 notary_progress="${work_dir}/notarytool.progress"
-xcrun notarytool "${notary_args[@]}" >"$notary_log" 2>"$notary_progress" || notary_status=$?
+# Outer bound on notarytool's own --timeout, which is Apple-side and has been
+# known not to honour itself. 18 minutes sits above the 15m it is asked for and
+# below the job's 30, so this fires first and says what hung.
+run_with_timeout 1080 "notarytool submit" \
+    xcrun notarytool "${notary_args[@]}" >"$notary_log" 2>"$notary_progress" || notary_status=$?
 
 # --wait writes progress to stderr and the verdict as JSON on stdout. The status
 # is read from the last object because an in-progress report can precede the
@@ -283,7 +346,8 @@ if [ "$verdict" != "Accepted" ]; then
                 --password "$APPLE_NOTARIZATION_PASSWORD"
                 --team-id "$APPLE_NOTARIZATION_TEAM_ID")
         fi
-        xcrun notarytool "${log_args[@]}" >/dev/null 2>&1 || true
+        run_with_timeout 300 "notarytool log" \
+            xcrun notarytool "${log_args[@]}" >/dev/null 2>&1 || true
         if [ -f "${output_dir}/notarization-${arch_suffix}.log" ]; then
             sed 's/^/    /' "${output_dir}/notarization-${arch_suffix}.log" >&2
         fi
@@ -294,12 +358,12 @@ fi
 echo "==> Stapling"
 # A missing ticket costs an online Gatekeeper check on first launch, not a
 # rejection, so a stapler failure is worth reporting and not worth failing on.
-if ! xcrun stapler staple "$dmg_path"; then
+if ! run_with_timeout 300 "stapler staple" xcrun stapler staple "$dmg_path"; then
     echo "warning: stapling failed; the DMG is notarized but not stapled."
 fi
 
 echo "==> Gatekeeper assessment"
-spctl --assess -vv --type install "$dmg_path"
+run_with_timeout 300 "spctl --assess" spctl --assess -vv --type install "$dmg_path"
 
 mv "$dmg_path" "${output_dir}/Lexed-${arch_suffix}.dmg"
 echo

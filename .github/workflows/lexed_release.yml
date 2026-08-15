@@ -230,7 +230,11 @@ jobs:
     needs: [prepare, build]
     if: needs.prepare.outputs.signing == 'true'
     runs-on: macos-latest
-    timeout-minutes: 60
+    # This job does no compilation: it downloads a bundle, signs it, and waits
+    # on Apple. The watchdogs inside script/lexed-sign-mac are what make a cap
+    # this tight safe — every blocking call there fails loudly well before this
+    # fires, so a job that hits 30 minutes means something genuinely new.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
