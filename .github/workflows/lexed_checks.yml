@@ -227,68 +227,34 @@ jobs:
       - name: Limit target directory size
         run: ./script/clear-target-dir-if-larger-than 350 200
 
-      # `.config/nextest.toml` is upstream-owned, so exclusions live here. Every
-      # entry is one test, named exactly, with the reason it cannot pass — and
-      # each one is coverage this fork is knowingly giving up. Excluding on both
-      # paths rather than only the main-push one: a pull request that touches
-      # `settings` or `auto_update` reaches these same tests through `rdeps()`.
+      # What runs and what does not is the fork's test policy, and it lives in
+      # `.config/lexed-nextest.toml` rather than here — one file, versioned,
+      # with the reason beside every entry, and usable locally through
+      # `script/lexed-test`. This step only decides *scope*.
+      #
+      # The policy layer applies on both paths on purpose: a pull request that
+      # touches `settings` or `auto_update` reaches the excluded tests through
+      # `rdeps()` just as a push to main does. Command-line filtersets are
+      # intersected with the layer's `default-filter`, so the scope below
+      # narrows the run without reopening anything the policy excludes.
+      #
+      # `--tool-config-file` requires an absolute path, hence `GITHUB_WORKSPACE`.
       - name: cargo nextest
         env:
           FILTERSET: ${{ steps.scope.outputs.filterset }}
         run: |
-          exclusions=(
-            # `assets/settings/default.json` sets `auto_update` to false for
-            # this fork; the test asserts the upstream default of true.
-            'package(auto_update) and test(=tests::test_auto_update_defaults_to_true)'
-            # Same default. Polling is gated on the setting, so the updater
-            # never leaves Idle and the test's wait loop runs to the 60s timeout.
-            'package(auto_update) and test(=tests::test_auto_update_downloads)'
-            # Same default, asserted through the settings store instead.
-            'package(settings) and test(=settings_store::tests::test_settings_store_basic)'
-            # collab is the collaboration server, which this fork neither runs
-            # nor ships. `test_both_dbs!` gives each of these a `_sqlite` twin
-            # that runs the same body and passes, so what is dropped is the
-            # postgres dialect, not the logic. A postgres service was tried and
-            # worked; it is left out because we do not run the server it tests,
-            # not because it was expensive.
-            'package(collab) and test(/_postgres$/)'
-            # Fails on 4-core runners and passes on faster ones, on identical
-            # code, in under a second — a wrong value rather than a timeout.
-            # Evidence and the leading suspicion are in docs/lexed/ci-plan.md,
-            # "A test that fails only on slow runners". Remove this line when
-            # that is resolved.
-            'package(language) and test(=buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks)'
-            # Runs out of a 60s budget of its own, inside the test, so no
-            # nextest setting reaches it: upstream already grants it 300s in
-            # `.config/nextest.toml` and it still failed at 62.5-62.8s on three
-            # consecutive runners. It passed at 57.081s on the one that went
-            # green — 2.9s of headroom on the best runner measured. Same
-            # slow-runner story as the bracket test above, recorded in
-            # docs/lexed/ci-plan.md. Remove this line when the fork's runner
-            # story changes, not before.
-            'package(extension_host) and test(=extension_store_test::test_extension_store_with_test_extension)'
-          )
-          excluded="$(printf '%s or ' "${exclusions[@]}")"
-          excluded="not (${excluded% or })"
-          echo "excluding: ${excluded}"
-          # Raises the 60s per-test budget for three randomized tests without
-          # editing the upstream `.config/nextest.toml`; that file explains the
-          # mechanism and carries the measurements. Applied on both paths for
-          # the same reason the exclusions are — `rdeps()` reaches those tests
-          # from a pull request too. `--tool-config-file` requires an absolute
-          # path, hence `GITHUB_WORKSPACE`.
           tool_config="lexed:${GITHUB_WORKSPACE}/.config/lexed-nextest.toml"
           if [ -n "$FILTERSET" ]; then
             cargo nextest run --workspace --no-fail-fast --no-tests=warn \
-              --tool-config-file "$tool_config" -E "($FILTERSET) and ${excluded}"
+              --tool-config-file "$tool_config" -E "$FILTERSET"
           else
             # One fewer thread than the runner has cores. The whole suite runs
             # only here, and several of its randomized tests sit close to the
-            # 60s per-test timeout in `.config/nextest.toml` — one measured 54s
+            # 60s per-test budget in `.config/nextest.toml` — one measured 54s
             # of its 60s on the run that passed. Leaving a core spare trades a
             # little wall clock for the headroom those tests need.
             cargo nextest run --workspace --no-fail-fast --no-tests=warn --test-threads 3 \
-              --tool-config-file "$tool_config" -E "${excluded}"
+              --tool-config-file "$tool_config"
           fi
 
       - name: sccache stats

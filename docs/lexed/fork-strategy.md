@@ -131,6 +131,32 @@ hand-edit the YAML. Upstream's heavy workflows are gated to
 inert in this fork — the active CI today is `lexed_diff_guard.yml`. Fork CI
 grows by adding new `lexed_*` generators, not by editing Zed's.
 
+**The fork-owned test policy layer** (zero upstream). `.config/nextest.toml`
+is Zed-owned and carries the 60-second per-test budget and upstream's own
+per-test overrides, so the fork cannot edit it to skip a test or grant one
+more time. It does not need to: nextest's `--tool-config-file` inserts a
+config layer _below_ the repository's and above nextest's defaults, and
+`.config/lexed-nextest.toml` is that layer. It holds both halves of the
+fork's policy — which tests are excluded, and which get a longer clock — each
+with the reason beside it, and `script/lexed-test` applies it, so a developer
+running the suite by hand gets the same answer CI does.
+
+Two properties make this work, and both were verified empirically rather than
+read off the documentation. Per-test settings such as `slow-timeout` layer
+through an ordinary `filter` override, because nextest resolves each setting
+independently: it takes the first matching override that actually _specifies_
+the setting, so an upstream override setting only `priority` does not block a
+fork override setting `slow-timeout`. Exclusions layer through
+`default-filter`, but only when attached to a platform-keyed override — as a
+plain profile-level setting it loses to the upstream layer — and command-line
+filtersets are then _intersected_ with it, so CI's change-scoped filterset
+narrows a run without reopening anything the policy excluded.
+
+Prefer a budget raise to an exclusion whenever the test passes given time; the
+assertions still run and a real hang still terminates. Reach for this layer
+before considering any upstream edit to test configuration: it costs nothing
+against the diff ceiling, because the file is fork-added.
+
 **Testing layers.** The `testing-lexed` skill (`.claude/skills/testing-lexed`)
 documents the ladder: `cargo nextest` crate suites, workspace-level gpui
 tests against fakes (including `FakeLspAdapter` for lex-lsp flows), the

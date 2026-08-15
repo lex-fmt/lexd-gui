@@ -42,4 +42,6 @@ for crate in "${crates[@]}"; do
 done
 
 echo "lexed-test-changed: ${crates[*]}"
-cargo nextest run "${packages[@]}"
+# Through `script/lexed-test` so the hook applies the same exclusions and
+# budgets CI does; a bare `cargo nextest run` here would answer differently.
+script/lexed-test "${packages[@]}"

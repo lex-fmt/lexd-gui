@@ -1,35 +1,119 @@
-# Lexed fork: per-test slow-timeout raises, layered under the upstream config.
+# Lexed fork: the fork's test policy, layered under the upstream nextest config.
 #
-# `.config/nextest.toml` is upstream-owned and must not be edited (fork-strategy
-# §2), and its `[profile.default]` sets a 60s per-test budget. This file is
-# passed to nextest with `--tool-config-file`, which inserts it *below* the
-# upstream config in priority but above nextest's built-in defaults.
+# This file is the single place where the fork says which tests it does not run
+# and which ones need a longer clock. It is passed to nextest with
+# `--tool-config-file`, which inserts it *below* `.config/nextest.toml` in
+# priority and above nextest's built-in defaults. That upstream file is
+# Zed-owned and must not be edited (fork-strategy.md §2, "The fork-owned test
+# policy layer"), which is the whole reason this one exists.
 #
-# That is enough, because nextest resolves each setting independently: it scans
-# matching overrides in priority order and takes the first one that actually
-# specifies the setting in question. Upstream's override for
-# `test_random_worktree_changes` sets only `priority`, so it does not answer
-# `slow-timeout`, and resolution falls through to the entry here. Verified
-# empirically before relying on it — an override in a tool config does take
-# effect over a higher-priority override that omits the setting.
+# Use it from anywhere, not just CI:
+#
+#     script/lexed-test                      # whole suite, fork policy applied
+#     script/lexed-test -p some_crate        # narrower, same policy
+#
+# `script/lexed-test` exists because `--tool-config-file` rejects a relative
+# path, so the raw form has to build an absolute one:
+#
+#     cargo nextest run --workspace \
+#         --tool-config-file "lexed:$PWD/.config/lexed-nextest.toml"
+#
+# `script/lexed-test --ignore-default-filter` runs the excluded tests anyway,
+# which is how you check whether an entry below has stopped being necessary.
+#
+# Two mechanisms, both verified empirically against nextest 0.9.111 before being
+# relied on, because the layering rules alone did not settle either one:
+#
+#   * Per-test settings such as `slow-timeout` layer through a plain `filter`
+#     override. nextest resolves each setting independently — it takes the first
+#     matching override that actually *specifies* the setting asked for — so an
+#     upstream override that sets only `priority` does not block one here that
+#     sets `slow-timeout`.
+#
+#   * `default-filter` does NOT layer as a profile-level setting: a
+#     `[profile.default] default-filter` here loses to the upstream config's
+#     layer. It DOES layer when attached to a platform-keyed override, which is
+#     the form used below. Filtersets passed on the command line are then
+#     intersected with it rather than replacing it, so the CI scope filterset
+#     and this policy compose instead of fighting.
+
+# ---------------------------------------------------------------------------
+# Exclusions
+# ---------------------------------------------------------------------------
+#
+# Every entry is coverage this fork is knowingly giving up. Read the reasons
+# before adding to the list.
+#
+# This has to be one override with one expression: nextest takes the first
+# matching `default-filter` and ignores later ones, so several overrides would
+# silently apply only the first. Filterset syntax has no comment form either,
+# so the reasons live here rather than beside each clause. Each paragraph below
+# quotes the clause it explains, so the two stay matched by name and not by
+# line order.
+#
+# `package(auto_update) and test(=tests::test_auto_update_defaults_to_true)`
+# `package(auto_update) and test(=tests::test_auto_update_downloads)`
+#     `assets/settings/default.json` turns `auto_update` off for this fork, and
+#     these assert the upstream default of true. The second one also never
+#     leaves Idle, because polling is gated on the setting, so its wait loop
+#     runs to the timeout rather than failing an assertion.
+#
+# `package(settings) and test(=settings_store::tests::test_settings_store_basic)`
+#     The same fork default, asserted through the settings store instead.
+#
+# `package(collab) and test(/_postgres$/)`
+#     collab is the collaboration server, which this fork neither runs nor
+#     ships. `test_both_dbs!` gives each of these a `_sqlite` twin that runs the
+#     same body and passes, so what is dropped is the postgres dialect, not the
+#     logic. A postgres service was tried and worked; it is left out because we
+#     do not run the server it tests, not because it was expensive.
+#
+# `package(language) and test(=buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks)`
+#     Fails on 4-core runners and passes on faster ones, on identical code, in
+#     under a second — a wrong value rather than a timeout. Evidence and the
+#     leading suspicion are in docs/lexed/ci-plan.md, "A test that fails only on
+#     slow runners". Remove when that is resolved.
+#
+# `package(extension_host) and test(=extension_store_test::test_extension_store_with_test_extension)`
+#     Runs out of a 60s budget of its own, inside the test, so no nextest
+#     setting reaches it: upstream already grants it 300s and it still failed at
+#     62.5-62.8s on three consecutive runners. It passed at 57.081s on the one
+#     that went green, which is 2.9s of headroom on the best machine measured.
+#     Same slow-runner story as the bracket test, recorded in the same place.
+#     Remove when the fork's runner story changes, not before.
+[[profile.default.overrides]]
+platform = 'cfg(all())'
+default-filter = """
+    not (
+        (package(auto_update) and test(=tests::test_auto_update_defaults_to_true))
+        or (package(auto_update) and test(=tests::test_auto_update_downloads))
+        or (package(settings) and test(=settings_store::tests::test_settings_store_basic))
+        or (package(collab) and test(/_postgres$/))
+        or (package(language) and test(=buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks))
+        or (package(extension_host) and test(=extension_store_test::test_extension_store_with_test_extension))
+    )
+"""
+
+# ---------------------------------------------------------------------------
+# Budget raises
+# ---------------------------------------------------------------------------
 #
 # Only tests that PASS given time belong here. A test that fails for any other
-# reason gets excluded in `lexed_checks.yml` with its reason, not a larger
-# budget — see `test_extension_store_with_test_extension`, which already has a
-# 300s budget upstream and still fails, because the 60s it runs out of is its
-# own, inside the test.
-
+# reason gets excluded above with its reason, not a larger budget.
+#
 # All three are randomized stress tests that finish in 24-40s on a healthy
-# runner and cross 60s on a slow one. Measured on identical code, on the run
-# that went green: `test_random_worktree_changes` 40.2s,
+# runner and cross the upstream 60s budget on a slow one. Measured on identical
+# code, on the run that went green: `test_random_worktree_changes` 40.2s,
 # `test_peers_following_each_other` 31.2s, `test_random_multibuffer` 24.6s.
 # Across three consecutive slower runners the first timed out at 60.0s on all
-# three runs, the third on two of them and the second on one.
-# `docs/lexed/ci-plan.md` records the same effect and the `--test-threads 3`
+# three, the third on two of them and the second on one. A later run on a slow
+# runner then passed them at 64.2s, 65.2s and 59.4s — that is the raise doing
+# the work, and the last of the three landing half a second inside the old
+# limit. `docs/lexed/ci-plan.md` records the effect and the `--test-threads 3`
 # mitigation that no longer covers it on its own.
 #
 # 120s is three times the slowest healthy-runner measurement. Raising the budget
-# is honest here in a way an exclusion would not be: the assertions still run and
+# is honest in a way an exclusion would not be: the assertions still run and
 # still have to hold, and a real hang still terminates.
 [[profile.default.overrides]]
 filter = 'package(worktree) and test(test_random_worktree_changes)'

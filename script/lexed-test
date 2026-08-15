@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+
+# Run tests with the fork's test policy applied — the exclusions and the
+# per-test budget raises in `.config/lexed-nextest.toml`. This is the entry
+# point CI and the git hooks use, so running it by hand gives the same answer
+# CI will give.
+#
+# It exists because `--tool-config-file` rejects a relative path, and hand-typing
+# an absolute one is how the policy quietly stops being applied.
+#
+# Usage: script/lexed-test [nextest args...]
+#   script/lexed-test                          whole workspace
+#   script/lexed-test -p lex_preview           one crate
+#   script/lexed-test -E 'package(settings)'   a filterset, intersected with
+#                                              the fork's exclusions
+#   script/lexed-test --ignore-default-filter  run the excluded tests too,
+#                                              to check an entry is still needed
+#
+# Defaults to `--workspace` when no package or filterset argument is given.
+
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+CONFIG="$PWD/.config/lexed-nextest.toml"
+
+if [ ! -f "$CONFIG" ]; then
+    echo "error: $CONFIG is missing; the fork's test policy lives there." >&2
+    exit 1
+fi
+
+scoped=false
+for arg in "$@"; do
+    case "$arg" in
+        -p | --package | --workspace | -E | --filterset | --filter-expr)
+            scoped=true
+            break
+            ;;
+        -p* | --package=*)
+            scoped=true
+            break
+            ;;
+    esac
+done
+
+args=("$@")
+if [ "$scoped" = false ]; then
+    args=(--workspace "$@")
+fi
+
+exec cargo nextest run --tool-config-file "lexed:$CONFIG" "${args[@]}"

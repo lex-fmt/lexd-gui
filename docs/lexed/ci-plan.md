@@ -126,8 +126,17 @@ them were this fork's own doing**: `assets/settings/default.json` is both the
 product configuration and the fixture upstream's tests assert against, so
 turning off `auto_update`, telemetry and edit predictions broke the tests that
 exercise them. `.config/nextest.toml` is upstream-owned, so the exclusions live
-in `lexed_checks.yml`, one test per entry with its reason beside it. Read that
-list before adding to it; each line is coverage given up on purpose.
+in `.config/lexed-nextest.toml`, the fork's test policy layer, each with its
+reason beside it. Read that list before adding to it; every entry is coverage
+given up on purpose.
+
+They began as a shell array inside the workflow, which meant the policy was
+only really expressible in CI and only readable as YAML. It is now a
+`default-filter` in the layer, which is versioned, applies identically to
+`script/lexed-test` on a laptop, and can be lifted for a single run with
+`--ignore-default-filter` to check whether an entry is still earning its place.
+The mechanism, including the two properties of nextest's layering that make it
+work, is described in fork-strategy.md §3.
 
 Seventeen of those twenty are not excluded. They all reach the defaults through
 `SettingsStore::test()`, so `crates/settings/src/settings_file.rs` restores the
@@ -165,6 +174,14 @@ for. Upstream's override for `test_random_worktree_changes` sets only
 `.config/lexed-nextest.toml`, a fork-added file, and it grants those three
 tests 120s. Verified empirically before it was relied on, since the precedence
 rules alone did not settle it.
+
+The same layer carries the exclusions, by a second and different route:
+`default-filter` does _not_ layer as a profile-level setting — one written that
+way loses to the upstream config — but it does when attached to a
+platform-keyed override, and filtersets given on the command line are then
+intersected with it rather than replacing it. That last property is what lets
+CI narrow a pull request to the crates it touched without reopening an excluded
+test. Both behaviours were measured, not assumed.
 
 A raise is only honest for a test that passes given time; the assertions still
 run and a real hang still terminates. A test that fails for any other reason
