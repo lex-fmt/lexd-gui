@@ -9,9 +9,10 @@ open_result=false
 local_install=false
 can_code_sign=false
 
-# This must match the team in the provisioning profile.
-IDENTITY="Zed Industries, Inc."
-APPLE_NOTARIZATION_TEAM="MQ55VZLNZQ"
+# The signing identity comes from the environment. Zed's own identity is gone:
+# a hardcoded default here is a build that silently signs as somebody else, or
+# fails deep inside codesign instead of at the top of the script.
+IDENTITY="${APPLE_SIGNING_IDENTITY:-}"
 
 # Function for displaying help info
 help_info() {
@@ -48,9 +49,13 @@ done
 shift $((OPTIND-1))
 
 
-# Get release channel
+# Get release channel. ZED_RELEASE_CHANNEL wins over the checked-in file so a
+# release build can produce the stable identity ("Lexed", ing.lex.Lexed) without
+# editing crates/zed/RELEASE_CHANNEL, which is upstream-owned and would cost a
+# slot against the diff guard (docs/lexed/fork-strategy.md §2). The value reaches
+# the binary through release_channel's build script, not just cargo bundle.
 pushd crates/zed
-channel=$(<RELEASE_CHANNEL)
+channel="${ZED_RELEASE_CHANNEL:-$(<RELEASE_CHANNEL)}"
 export ZED_RELEASE_CHANNEL="${channel}"
 popd
 
@@ -119,6 +124,11 @@ fi
 
 if [[ -n "${MACOS_CERTIFICATE:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" && -n "${APPLE_NOTARIZATION_KEY:-}" && -n "${APPLE_NOTARIZATION_KEY_ID:-}" && -n "${APPLE_NOTARIZATION_ISSUER_ID:-}" ]]; then
     can_code_sign=true
+
+    if [[ -z "$IDENTITY" ]]; then
+        echo "error: APPLE_SIGNING_IDENTITY must be set to sign the bundle." >&2
+        exit 1
+    fi
 
     echo "Setting up keychain for code signing..."
     security create-keychain -p "$MACOS_CERTIFICATE_PASSWORD" zed.keychain || echo ""
@@ -195,8 +205,14 @@ function sign_app_binaries() {
     echo "Downloading git binary"
     download_git "${target_triple}" "${app_path}/Contents/MacOS/git"
 
-    # Note: The app identifier for our development builds is the same as the app identifier for nightly.
-    cp crates/zed/contents/$channel/embedded.provisionprofile "${app_path}/Contents/"
+    # The profiles under crates/zed/contents/ belong to Zed Industries and must
+    # never ship inside a Lexed build. Lexed needs none of its own either: the
+    # entitlements in crates/zed/resources/zed.entitlements are all unrestricted,
+    # so Developer ID signing validates without a profile. Set
+    # LEXED_PROVISION_PROFILE to a path if that ever stops being true.
+    if [[ -n "${LEXED_PROVISION_PROFILE:-}" ]]; then
+        cp "${LEXED_PROVISION_PROFILE}" "${app_path}/Contents/embedded.provisionprofile"
+    fi
 
     if [[ $can_code_sign = true ]]; then
         echo "Code signing binaries"
@@ -333,4 +349,8 @@ cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
 sign_binary "target/$target_triple/release/remote_server"
-gzip -f --stdout --best target/$target_triple/release/remote_server > target/zed-remote-server-macos-$arch_suffix.gz
+# The published archive carries the fork's name. The binary's own identity
+# and the ~/.zed_server path it is uploaded to on a remote host stay Zed's:
+# those strings are the local/remote protocol and live in six upstream files
+# the fork has not touched (docs/lexed/ci-plan.md §3).
+gzip -f --stdout --best target/$target_triple/release/remote_server > target/lexed-remote-server-macos-$arch_suffix.gz

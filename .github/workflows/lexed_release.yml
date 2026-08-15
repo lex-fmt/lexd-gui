@@ -1,0 +1,348 @@
+name: lexed_release
+
+# Tag-driven macOS release (docs/lexed/ci-plan.md §3). The tag is the version
+# authority: nothing is inferred from Cargo.toml or a channel file.
+#
+#   prepare ──▶ build (matrix) ──▶ sign (matrix) ──▶ publish
+#      │            │                  │                ▲
+#      │            └── bundle-<arch> ─┴── signed-<arch> ┤
+#      └── release-notes ─────────────────────────────────
+#
+# The split exists so credentials touch exactly one job. The build runs with no
+# secrets at all and produces an ad-hoc signed bundle; `sign` is the only job
+# that fetches the Developer ID certificate and the notarization credentials.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+# Releases are not interchangeable, so a second run for the same tag queues
+# behind the first rather than cancelling it.
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -euxo pipefail {0}
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      signing: ${{ steps.signing.outputs.available }}
+    steps:
+      # Full history so the notes can span from the previous tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - id: tag
+        name: Validate the tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            tag="$INPUT_TAG"
+          else
+            tag="$PUSH_TAG"
+          fi
+
+          if ! printf '%s' "$tag" |
+            grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "error: '$tag' is not a v<semver> tag (expected e.g. v0.1.0 or v1.2.3-rc.1)." >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+
+          # Everything on 0.x is a prerelease regardless of shape: the fork has
+          # not made a compatibility promise yet.
+          case "$version" in
+            0.*|*-*) prerelease=true;;
+            *) prerelease=false;;
+          esac
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >>"$GITHUB_OUTPUT"
+
+      # Secrets are unreadable from a job-level `if`, so availability is decided
+      # once here and carried forward as an output. Without it the sign job
+      # would fail deep inside codesign on a fork rather than say why.
+      - id: signing
+        name: Check for signing credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          if [ -n "$DOPPLER_TOKEN" ]; then
+            echo "available=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            echo "::warning::DOPPLER_TOKEN is not available; signing and publishing will be skipped."
+          fi
+
+      - name: Assemble release notes
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          previous="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            range="${previous}..${TAG}"
+            heading="Changes since ${previous}:"
+          else
+            # No earlier release to diff against. The fork's own history is the
+            # honest answer, and it is the only bounded one — a bare "$TAG"
+            # range would list every commit Zed has ever made.
+            range="$(cat ZED_BASE)..${TAG}"
+            heading="Lexed changes since the upstream Zed base:"
+          fi
+          {
+            echo "$heading"
+            echo
+            git log --no-merges --pretty='- %s' "$range"
+            echo
+            echo "The corresponding source for this release is attached as"
+            echo "\`lexed-*-src.tar.gz\` (GPL-3.0-or-later)."
+          } >notes.md
+          cat notes.md
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-notes
+          path: notes.md
+          if-no-files-found: error
+
+  build:
+    name: Build (${{ matrix.arch }})
+    needs: prepare
+    runs-on: macos-latest
+    # Sized for a cold run, and generously. A hosted macOS runner has a fraction
+    # of the cores a developer machine does, the release profile shares no
+    # cached compilation units with the dev-profile jobs in lexed_checks.yml,
+    # and bundle-mac makes three cargo passes (zed + cli, then remote_server
+    # under different feature unification, then cargo bundle). The first
+    # measured run was still in the first pass at the two-hour mark.
+    timeout-minutes: 240
+    env:
+      # sccache's server exits after 600 idle seconds by default. This build
+      # goes far longer than that between compile requests — one gap between
+      # two crates measured 44 minutes on a hosted runner — so the server dies
+      # mid-build and restarts, losing its statistics and doing the handshake
+      # work again. The checks workflow never hits this because its jobs are
+      # short and densely parallel.
+      SCCACHE_IDLE_TIMEOUT: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            triple: aarch64-apple-darwin
+          - arch: x86_64
+            triple: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      # Release-profile artifacts share nothing with the dev-profile ones the
+      # checks workflow caches, so this key is deliberately its own.
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          key: release-${{ matrix.arch }}
+
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
+
+      # No signing credentials reach this job, so bundle-mac takes its ad-hoc
+      # path. ZED_RELEASE_CHANNEL overrides crates/zed/RELEASE_CHANNEL, which is
+      # upstream-owned and stays at `dev` for local builds.
+      - name: Bundle
+        env:
+          ZED_RELEASE_CHANNEL: stable
+          TRIPLE: ${{ matrix.triple }}
+        run: ./script/bundle-mac "$TRIPLE"
+
+      # upload-artifact flattens symlinks and drops the exec bit, either of
+      # which turns a .app into something that cannot be signed on the far side.
+      # The tar is what survives the round trip.
+      - name: Collect the bundle
+        env:
+          ARCH: ${{ matrix.arch }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          mkdir -p artifacts
+          app_path="$(find "target/${TRIPLE}/release/dmg" -maxdepth 1 -name '*.app' -print -quit)"
+          if [ -z "$app_path" ]; then
+            echo "error: bundle-mac produced no .app under target/${TRIPLE}/release/dmg." >&2
+            exit 1
+          fi
+          tar -czf "artifacts/Lexed-${ARCH}.unsigned-app.tar.gz" \
+            -C "$(dirname "$app_path")" "$(basename "$app_path")"
+          cp "target/${TRIPLE}/release/Lexed-${ARCH}.dmg" "artifacts/Lexed-${ARCH}.unsigned.dmg"
+          cp "target/lexed-remote-server-macos-${ARCH}.gz" artifacts/
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: artifacts
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h
+          du -sh target 2>/dev/null || true
+
+  sign:
+    name: Sign (${{ matrix.arch }})
+    needs: [prepare, build]
+    if: needs.prepare.outputs.signing == 'true'
+    runs-on: macos-latest
+    # This job does no compilation: it downloads a bundle, signs it, and waits
+    # on Apple. The watchdogs inside script/lexed-sign-mac are what make a cap
+    # this tight safe — every blocking call there fails loudly well before this
+    # fires, so a job that hits 30 minutes means something genuinely new.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x86_64]
+    steps:
+      # The signing script and the entitlements live in the tree, so this job
+      # needs the tag checked out even though it compiles nothing.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bundle-${{ matrix.arch }}
+          path: bundle
+
+      # The token grants read access to one Doppler config holding nothing but
+      # the Apple signing material. Values arrive as masked environment
+      # variables for the steps below, so no secret is ever interpolated into a
+      # run block.
+      - name: Fetch signing credentials
+        uses: dopplerhq/secrets-fetch-action@451892f16195f9ac360e1a5bcbf0b5fd0e957534 # v2.0.0
+        with:
+          doppler-token: ${{ secrets.DOPPLER_TOKEN }}
+          inject-env-vars: true
+
+      - name: Sign, notarize and staple
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          ./script/lexed-sign-mac \
+            -o signed \
+            -r "bundle/lexed-remote-server-macos-${ARCH}.gz" \
+            "bundle/Lexed-${ARCH}.unsigned-app.tar.gz"
+          ls -la signed
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-${{ matrix.arch }}
+          path: signed
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [prepare, build, sign]
+    if: needs.prepare.outputs.signing == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      # git archive needs the tag object itself, not a shallow tip.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      # These paths are deliberately not `notes` and `assets`: the checkout is
+      # already sitting in the workspace, `assets/` is Zed's own bundled-assets
+      # directory, and download-artifact merges into an existing directory
+      # rather than refusing. That turned the upload glob below into a list of
+      # the repo's own `fonts`, `icons` and `themes` directories.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-notes
+          path: release-notes
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: signed-*
+          merge-multiple: true
+          path: release-assets
+
+      # GPL-3.0-or-later obliges us to offer the corresponding source of every
+      # binary we ship, and the only source that corresponds is the exact tag
+      # (docs/lexed/fork-strategy.md §4).
+      - name: Build the corresponding-source tarball
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          git archive --format=tar.gz \
+            --prefix="lexed-${VERSION}/" \
+            -o "release-assets/lexed-${VERSION}-src.tar.gz" \
+            "$TAG"
+          ls -la release-assets
+
+      - name: Create or update the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes-file release-notes/notes.md \
+              --prerelease="$PRERELEASE"
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$TAG" \
+              --notes-file release-notes/notes.md \
+              --prerelease="$PRERELEASE"
+          fi
+
+          # Only regular files, never a bare glob: gh reports "is a directory"
+          # one asset at a time and aborts the whole upload on the first.
+          find release-assets -maxdepth 1 -type f -print0 |
+            xargs -0 gh release upload "$TAG" --clobber
+          gh release view "$TAG"
