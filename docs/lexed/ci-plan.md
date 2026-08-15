@@ -138,6 +138,11 @@ only really expressible in CI and only readable as YAML. It is now a
 The mechanism, including the two properties of nextest's layering that make it
 work, is described in fork-strategy.md §3.
 
+The move was proved rather than assumed: `cargo nextest list --workspace` under
+the old shell-array expression and under the policy layer came back
+byte-identical at 8109 entries, and the full suite then passed 8109 of 8109
+with 38 skipped — 19 pre-existing `#[ignore]`s and the 19 the policy excludes.
+
 Seventeen of those twenty are not excluded. They all reach the defaults through
 `SettingsStore::test()`, so `crates/settings/src/settings_file.rs` restores the
 upstream values in the override block `test_settings()` already merges — the
