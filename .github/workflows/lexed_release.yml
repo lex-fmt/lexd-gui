@@ -206,7 +206,7 @@ jobs:
           tar -czf "artifacts/Lexed-${ARCH}.unsigned-app.tar.gz" \
             -C "$(dirname "$app_path")" "$(basename "$app_path")"
           cp "target/${TRIPLE}/release/Lexed-${ARCH}.dmg" "artifacts/Lexed-${ARCH}.unsigned.dmg"
-          cp "target/zed-remote-server-macos-${ARCH}.gz" artifacts/
+          cp "target/lexed-remote-server-macos-${ARCH}.gz" artifacts/
           ls -la artifacts
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -267,7 +267,7 @@ jobs:
         run: |
           ./script/lexed-sign-mac \
             -o signed \
-            -r "bundle/zed-remote-server-macos-${ARCH}.gz" \
+            -r "bundle/lexed-remote-server-macos-${ARCH}.gz" \
             "bundle/Lexed-${ARCH}.unsigned-app.tar.gz"
           ls -la signed
 

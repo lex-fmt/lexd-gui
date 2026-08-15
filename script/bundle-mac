@@ -349,4 +349,8 @@ cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
 sign_binary "target/$target_triple/release/remote_server"
-gzip -f --stdout --best target/$target_triple/release/remote_server > target/zed-remote-server-macos-$arch_suffix.gz
+# The published archive carries the fork's name. The binary's own identity
+# and the ~/.zed_server path it is uploaded to on a remote host stay Zed's:
+# those strings are the local/remote protocol and live in six upstream files
+# the fork has not touched (docs/lexed/ci-plan.md §3).
+gzip -f --stdout --best target/$target_triple/release/remote_server > target/lexed-remote-server-macos-$arch_suffix.gz

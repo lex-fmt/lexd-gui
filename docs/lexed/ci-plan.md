@@ -172,7 +172,21 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   path (ad-hoc sign). Upload `bundle-<arch>` containing the DMG **and the
   `.app` tar'd** (`Lexed-<arch>.unsigned-app.tar.gz`). The tar is mandatory:
   `actions/upload-artifact` destroys symlinks and exec bits inside a `.app`
-  (shipit scar). Also emit `zed-remote-server-macos-<arch>.gz`.
+  (shipit scar). Also emit `lexed-remote-server-macos-<arch>.gz`.
+
+  **That archive is renamed; the binary inside it is not.** The published
+  filename is only a label — nothing reads it. The client asks Zed's cloud API
+  for an asset _named_ `zed-remote-server` (`build_zed_cloud_url_with_query`
+  against `/releases/{channel}/{version}/asset`), never for a GitHub file, and
+  the fork points `server_url` at a dead loopback anyway. So renaming the
+  archive discharges the trademark obligation in fork-strategy §4 at zero cost.
+  The string itself stays: `zed-remote-server-{channel}-{version}` is the path
+  the local app uploads to under `~/.zed_server` on a remote host and the prefix
+  the server uses to find its own older copies, so it is the local/remote
+  protocol — and it lives in six upstream files the fork has never touched
+  (`remote/src/transport/{ssh,docker,wsl}.rs`, `remote_server/src/server.rs`,
+  `auto_update/src/auto_update.rs`, `util/src/shell.rs`). Renaming it would cost
+  six of the one remaining slot under the diff guard.
 
   Two things this job needs that no other job does, both measured the hard way
   on the first tracer run:
