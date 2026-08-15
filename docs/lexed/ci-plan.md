@@ -129,20 +129,46 @@ exercise them. `.config/nextest.toml` is upstream-owned, so the exclusions live
 in `lexed_checks.yml`, one test per entry with its reason beside it. Read that
 list before adding to it; each line is coverage given up on purpose.
 
-Seventeen of those twenty should not stay excluded. They all reach the defaults
-through `SettingsStore::test()`, so adding the upstream values to the override
-block `test_settings()` already merges recovers every one — verified at 160/160
-across the affected packages. It costs one new upstream file and the last
-diff-guard slot, which is why it has not been spent yet.
+Seventeen of those twenty are not excluded. They all reach the defaults through
+`SettingsStore::test()`, so `crates/settings/src/settings_file.rs` restores the
+upstream values in the override block `test_settings()` already merges — the
+shipped defaults are untouched. That spent the last diff-guard slot, which now
+stands at **60 of 60**. A later settings-overlay refactor keeping fork defaults
+out of `default.json` would remove the need for it and free two slots.
 
-Separately, and not caused by the fork: **the suite is at the edge of what a
+Separately, and not caused by the fork: **the suite was at the edge of what a
 4-core hosted runner can finish inside the 60-second per-test timeout.**
 `worktree::test_random_worktree_changes` took 54s of its 60s budget on the run
-that passed, and two later runs of the same code came in ~50% slower overall and
-timed it out. `.config/nextest.toml` cannot be edited from the fork side and
-nextest has no command-line override for the timeout, so the levers are larger
-runners, fewer test threads, or exclusions. Treat a green full suite as
-provisional until that is settled.
+that passed, and later runs of the same code came in ~50% slower and timed it
+out along with two other randomized tests. `.config/nextest.toml` cannot be
+edited from the fork side and nextest has no command-line override for the
+timeout, so the fix was `--test-threads 3` on the full-suite path — one fewer
+than the runner has cores.
+
+That was not just a stay of execution. Leaving a core spare made the suite
+**faster**, 1371s against 1870s at four threads, because the long randomized
+tests stop fighting each other for CPU. If the suite grows enough to creep back
+toward the limit, the next lever is a larger runner, not another exclusion.
+
+### A test that fails only on slow runners
+
+`language::buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks`
+is excluded, and it is the one exclusion here that is not about a deliberate
+fork decision. On identical code it passed in 0.280s on the runner that ran
+`main`, and failed in 0.771s and 0.709s on two slower runners — a wrong value,
+`None` where `Some(2)` was expected at `crates/language/src/buffer_tests.rs:1454`,
+not a timeout. Reducing thread count fixed every other slow-runner failure and
+did not fix this one.
+
+What makes it worth writing down rather than shrugging at: the test is
+synchronous — `#[gpui::test] fn …(cx: &mut App)`, no awaits, no timers — so
+under GPUI's deterministic scheduler it should not be sensitive to machine speed
+at all. The leading suspicion, unconfirmed, is that the syntax parse for a
+fixture deliberately larger than `MAX_BYTES_TO_QUERY` runs on a real background
+thread rather than under the test scheduler, so `buffer.snapshot()` taken
+immediately after `with_language` can be queried before the tree exists. That
+would make the test racy everywhere and merely more visible on slow hardware.
+It is not reproducible on a fast machine by running the test alone.
 
 ### Why compilation stays unscoped
 
