@@ -462,7 +462,7 @@ never writes into the caller's checkout. The trap only deletes a
 target directory the script created; one handed in through the environment
 belongs to the caller.
 
-CI cost is the reason the job carries `timeout-minutes: 90`, the disk reclaim
+CI cost is the reason the job carries `timeout-minutes: 60`, the disk reclaim
 step, and `setup-sccache` wired exactly as `lexed_checks.yml` does it. The
 throwaway worktree's target directory is new every week, so `Swatinem/rust-cache`
 has nothing to restore and sccache's shared bucket is the only cache that can
@@ -480,7 +480,10 @@ The steady state has a bad case worth budgeting for, though: when upstream
 touches a foundational crate, everything downstream of it recompiles and the
 run approaches a cold build again. The measurement run here landed on exactly
 that — upstream's tip was `gpui: Unify performance tracking under the profiler
-feature`. So the 90-minute timeout is sized for a cold run, not the median one.
+feature`. So the timeout is sized for a cold run, not the median one. It is set
+to 60 minutes, which the first real dispatch should confirm is enough for that
+bad case; the canary has never actually run, so the number is still a guess
+being tested rather than a measurement.
 
 Not included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
 building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`
