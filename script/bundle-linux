@@ -45,7 +45,12 @@ done
 
 export ZED_BUNDLE=true
 
-channel=$(<crates/zed/RELEASE_CHANNEL)
+# ZED_RELEASE_CHANNEL wins over the checked-in file so a release build can
+# produce the stable identity without editing crates/zed/RELEASE_CHANNEL, which
+# is upstream-owned (docs/lexed/fork-strategy.md §2). Exported, because
+# release_channel's build script is what bakes it into the binary.
+channel="${ZED_RELEASE_CHANNEL:-$(<crates/zed/RELEASE_CHANNEL)}"
+export ZED_RELEASE_CHANNEL="${channel}"
 target_dir="${CARGO_TARGET_DIR:-target}"
 
 version="$(script/get-crate-version zed)"
@@ -98,13 +103,13 @@ if ! command -v sentry-cli >/dev/null 2>&1; then
     echo "sentry-cli not found. skipping sentry upload."
     echo "install with: 'curl -sL https://sentry.io/get-cli | bash'"
 else
-    if [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    if [[ -n "${SENTRY_AUTH_TOKEN:-}" && -n "${SENTRY_ORG:-}" && -n "${SENTRY_PROJECT:-}" ]]; then
         echo "Uploading zed debug symbols to sentry..."
         # note: this uploads the unstripped binary which is needed because it contains
         # .eh_frame data for stack unwinding. see https://github.com/getsentry/symbolic/issues/783
         for attempt in 1 2 3; do
             echo "Attempting sentry upload (attempt $attempt/3)..."
-            if sentry-cli debug-files upload --include-sources --wait -p zed -o zed-dev \
+            if sentry-cli debug-files upload --include-sources --wait -p "$SENTRY_PROJECT" -o "$SENTRY_ORG" \
                 "${target_dir}/${target_triple}"/release/lexed \
                 "${target_dir}/${remote_server_triple}"/release/remote_server; then
                 echo "Sentry upload successful on attempt $attempt"
@@ -145,12 +150,12 @@ fi
 # Move everything that should end up in the final package
 # into a temp directory.
 temp_dir=$(mktemp -d)
-zed_dir="${temp_dir}/zed$suffix.app"
+lexed_dir="${temp_dir}/lexed$suffix.app"
 
 # Binary
-mkdir -p "${zed_dir}/bin" "${zed_dir}/libexec"
-cp "${target_dir}/${target_triple}/release/lexed" "${zed_dir}/libexec/zed-editor"
-cp "${target_dir}/${target_triple}/release/cli" "${zed_dir}/bin/zed"
+mkdir -p "${lexed_dir}/bin" "${lexed_dir}/libexec"
+cp "${target_dir}/${target_triple}/release/lexed" "${lexed_dir}/libexec/lexed-editor"
+cp "${target_dir}/${target_triple}/release/cli" "${lexed_dir}/bin/lexed"
 
 # Libs
 # Bundle libstdc++ so older supported systems can run binaries built with our
@@ -161,49 +166,52 @@ find_libs() {
         grep -v '\<\(libc.so\|libgcc_s.so\|libm.so\|libpthread.so\|libdl.so\|libasound.so\)'
 }
 
-mkdir -p "${zed_dir}/lib"
-rm -rf "${zed_dir}/lib/*"
-cp $(find_libs) "${zed_dir}/lib"
+mkdir -p "${lexed_dir}/lib"
+rm -rf "${lexed_dir}/lib/*"
+cp $(find_libs) "${lexed_dir}/lib"
 
 # Icons
-mkdir -p "${zed_dir}/share/icons/hicolor/512x512/apps"
-cp "crates/zed/resources/app-icon$suffix.png" "${zed_dir}/share/icons/hicolor/512x512/apps/zed.png"
-mkdir -p "${zed_dir}/share/icons/hicolor/1024x1024/apps"
-cp "crates/zed/resources/app-icon$suffix@2x.png" "${zed_dir}/share/icons/hicolor/1024x1024/apps/zed.png"
+mkdir -p "${lexed_dir}/share/icons/hicolor/512x512/apps"
+cp "crates/zed/resources/app-icon$suffix.png" "${lexed_dir}/share/icons/hicolor/512x512/apps/lexed.png"
+mkdir -p "${lexed_dir}/share/icons/hicolor/1024x1024/apps"
+cp "crates/zed/resources/app-icon$suffix@2x.png" "${lexed_dir}/share/icons/hicolor/1024x1024/apps/lexed.png"
 
 # .desktop
 export DO_STARTUP_NOTIFY="true"
-export APP_CLI="zed"
-export APP_ICON="zed"
+export APP_CLI="lexed"
+export APP_ICON="lexed"
 export APP_ARGS="%U"
 if [[ "$channel" == "preview" ]]; then
-  export APP_NAME="Zed Preview"
-  APP_ID="dev.zed.Zed-Preview"
+  export APP_NAME="Lexed Preview"
+  APP_ID="ing.lex.Lexed-Preview"
 elif [[ "$channel" == "nightly" ]]; then
-  export APP_NAME="Zed Nightly"
-  APP_ID="dev.zed.Zed-Nightly"
+  export APP_NAME="Lexed Nightly"
+  APP_ID="ing.lex.Lexed-Nightly"
 elif [[ "$channel" == "dev" ]]; then
-  export APP_NAME="Zed Devel"
-  APP_ID="dev.zed.Zed-Dev"
+  export APP_NAME="Lexed Dev"
+  APP_ID="ing.lex.Lexed-Dev"
 else
-  export APP_NAME="Zed"
-  APP_ID="dev.zed.Zed"
+  export APP_NAME="Lexed"
+  APP_ID="ing.lex.Lexed"
 fi
 
-mkdir -p "${zed_dir}/share/applications"
-envsubst < "crates/zed/resources/zed.desktop.in" > "${zed_dir}/share/applications/$APP_ID.desktop"
-chmod +x "${zed_dir}/share/applications/$APP_ID.desktop"
+mkdir -p "${lexed_dir}/share/applications"
+envsubst < "crates/zed/resources/zed.desktop.in" > "${lexed_dir}/share/applications/$APP_ID.desktop"
+chmod +x "${lexed_dir}/share/applications/$APP_ID.desktop"
 
 # Copy generated licenses so they'll end up in archive too
-cp "assets/licenses.md" "${zed_dir}/licenses.md"
+cp "assets/licenses.md" "${lexed_dir}/licenses.md"
 
 # Create archive out of everything that's in the temp directory
 arch=$(uname -m)
-archive="zed-linux-${arch}.tar.gz"
+archive="lexed-linux-${arch}.tar.gz"
 
 rm -rf "${archive}"
-remove_match="zed(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
+remove_match="lexed(-[a-zA-Z0-9]+)?-linux-$(uname -m)\.tar\.gz"
 ls "${target_dir}/release" | grep -E ${remove_match} | xargs -d "\n" -I {} rm -f "${target_dir}/release/{}" || true
-tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "zed$suffix.app"
+tar -czvf "${target_dir}/release/$archive" -C ${temp_dir} "lexed$suffix.app"
 
-gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/zed-remote-server-linux-${arch}.gz"
+# Renamed like the macOS archive: the filename is only a label. The binary's
+# own identity and the ~/.zed_server path stay Zed's — that is the
+# local/remote protocol (docs/lexed/ci-plan.md §3).
+gzip -f --stdout --best "${target_dir}/${remote_server_triple}/release/remote_server" > "${target_dir}/lexed-remote-server-linux-${arch}.gz"

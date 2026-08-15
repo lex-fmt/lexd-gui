@@ -906,10 +906,13 @@ mod linux {
                 let cli = env::current_exe()?;
                 let dir = cli.parent().context("no parent path for cli")?;
 
-                // libexec is the standard, lib/zed is for Arch (and other non-libexec distros),
-                // ./zed is for the target directory in development builds.
-                let possible_locations =
-                    ["../libexec/zed-editor", "../lib/zed/zed-editor", "./lexed"];
+                // libexec is the standard, lib/lexed is for Arch (and other non-libexec
+                // distros), ./lexed is for the target directory in development builds.
+                let possible_locations = [
+                    "../libexec/lexed-editor",
+                    "../lib/lexed/lexed-editor",
+                    "./lexed",
+                ];
                 possible_locations
                     .iter()
                     .find_map(|p| dir.join(p).canonicalize().ok().filter(|path| path != &cli))

@@ -413,6 +413,24 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
     reported with conclusion **`cancelled`**, not `failure` — it reads at a
     glance as though a human stopped it.
 
+- **build_linux** (ubuntu-latest): `script/bundle-linux`, producing
+  `lexed-linux-x86_64.tar.gz` and `lexed-remote-server-linux-x86_64.gz`. No sign
+  stage — nothing notarizes an ELF — so it flows straight to publish. It is
+  also the **instrumented baseline**: Linux is the only target where the shared
+  sccache bucket and mold both apply, so its release-profile time is what the
+  macOS cost is read against.
+
+  **mold must come through `RUSTFLAGS`, not `.cargo/config.toml`.**
+  `bundle-linux` exports its own `RUSTFLAGS`, and per cargo#5376 that overrides
+  config-file rustflags entirely — so the trick `lexed_checks.yml` uses is
+  silently ignored here. Measured on a throwaway crate, reading
+  `readelf -p .comment` each time: config alone selects mold; config plus any
+  `RUSTFLAGS` does **not**; `RUSTFLAGS` carrying the flag does. The job asserts
+  mold in the linked binary rather than trusting the flag, and `.comment`
+  survives `llvm-objcopy --strip-debug`. On aarch64 `bundle-linux` appends
+  `-fuse-ld=lld` after whatever it inherits, so lld wins there; CI targets
+  x86_64, where that branch does not fire.
+
 - **sign** (macos-latest, matrix over the same arches): download
   `bundle-<arch>`, fetch the Apple credentials from Doppler (§4), untar the
   `.app`, then re-sign properly and reseal. All of it lives in
@@ -500,9 +518,17 @@ all landed with phase 4:
 The Sentry slugs (`-p zed -o zed-dev`) are left alone: `upload_debug_symbols`
 already no-ops without `SENTRY_AUTH_TOKEN`, which CI never sets.
 
-**Deferred, deliberately**: Linux/Windows packaging (`bundle-linux` is
-fork-touched, `bundle-windows.ps1` still ships `dev.zed.Zed*` identities —
-needs its own pass); Linux-hosted signing via `rcodesign` (shipit proved the
+**`script/bundle-linux` was a half-finished rebrand.** `zed.desktop.in` had
+been swept, but the variables feeding it had not: it produced `zed$suffix.app`
+registering `dev.zed.Zed`, with `libexec/zed-editor`, `bin/zed` and
+`zed-linux-<arch>.tar.gz`. All of that now carries the fork's names. One rename
+needed an upstream file — `crates/cli/src/main.rs` locates the editor through
+`../libexec/zed-editor`, so the search list had to move with the payload — but
+that file was already fork-touched, so the guard held at 59.
+
+**Deferred, deliberately**: Windows packaging (`bundle-windows.ps1` still ships
+`dev.zed.Zed*` identities — needs its own pass); Linux-hosted signing via
+`rcodesign` (shipit proved the
 whole sign+DMG+notarize chain works in a Linux container at ~1/10 the runner
 cost — worth adopting once the macOS-runner chain is boringly stable);
 auto-updater endpoints; nightly channel.
