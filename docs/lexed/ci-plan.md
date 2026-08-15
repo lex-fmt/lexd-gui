@@ -133,10 +133,18 @@ can be retried against an existing tag without re-cutting it.
 Worth knowing before debugging a release: **a tag-push run executes the
 workflow file as it exists at the tag's commit**, not at the branch head. A fix
 pushed to the branch does not reach a run already triggered, and does not reach
-a re-run of it either — the tag has to be moved or re-cut. `workflow_dispatch`
-has the same property, since it also checks the workflow out of the ref it runs
-on. This is what makes the workflow testable from a branch before merge, and
-also what makes a stale tag quietly re-run old logic.
+a re-run of it either — the tag has to be moved or re-cut. This is what makes
+the workflow testable from a branch before merge, and also what makes a stale
+tag quietly re-run old logic.
+
+`workflow_dispatch` is **not** simply the same property, and the difference has
+teeth. Dispatching against a branch takes the **workflow file from the branch**
+while every job still checks out `needs.prepare.outputs.tag` — so the **scripts
+come from the tag**. That split is exactly what makes dispatch a good recovery
+route for a YAML-only fix, and exactly what makes it useless for a change that
+spans YAML and `script/`: the new workflow runs against the old scripts and
+fails on the seam between them. A change touching both has to be validated by a
+tag cut at a commit that contains both halves.
 
 Chained jobs with
 an explicit artifact contract — shipit's one genuinely good workflow idea —
