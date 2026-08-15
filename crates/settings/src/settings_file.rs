@@ -162,6 +162,21 @@ pub fn test_settings() -> &'static str {
             }),
             &mut value,
         );
+        // Lexed changes these three defaults in assets/settings/default.json
+        // for product reasons. They are fixture to the tests that read them,
+        // not subject: the tests exercise auto-update polling, telemetry
+        // queueing and edit-prediction behaviour, and all of it is unreachable
+        // when the feature is off by default. Restore the upstream values here
+        // so tests see what upstream tests see; the shipped defaults are
+        // untouched.
+        util::merge_non_null_json_value_into(
+            serde_json::json!({
+                "auto_update": true,
+                "telemetry": { "diagnostics": true, "metrics": true },
+                "edit_predictions": { "provider": "zed" },
+            }),
+            &mut value,
+        );
         value.as_object_mut().unwrap().remove("languages");
         serde_json::to_string(&value).unwrap()
     });
