@@ -64,7 +64,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    # Measured worst case is 24m48s truly cold, 13-15m with sccache warm, so 30
+    # is deliberately tight: an overrun means something regressed in the build
+    # or the cache stopped working. Investigate it, do not raise this number.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -134,7 +137,16 @@ jobs:
   tests:
     name: Tests (ubuntu-latest)
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Sized on whole-job wall clock, not on the test-execution figure: the job
+    # also pays ~4-8 min of setup and ~12-14 min compiling test binaries.
+    # Observed totals run 39 min on a healthy runner to past 45 on a slow one,
+    # so the 30 the other jobs use is not available here. 60 is that spread plus
+    # margin, still a 3x cut from the old 180.
+    #
+    # Sizing this one tight is a false economy, which a 45 tried here proved: a
+    # cap that falls inside the spread does not catch anything, it just converts
+    # a readable red run into a cancelled one with no summary to read.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
