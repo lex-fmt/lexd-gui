@@ -194,9 +194,7 @@ jobs:
       - id: scope
         name: Compute test scope
         run: |
-          # TEMPORARY, REVERTED IN THE NEXT COMMIT: force the full-workspace
-          # path so this pull request proves what a push to main will run.
-          if true || [ -z "${GITHUB_BASE_REF:-}" ]; then
+          if [ -z "${GITHUB_BASE_REF:-}" ]; then
             echo "push build: running the full workspace"
             echo "filterset=" >>"$GITHUB_OUTPUT"
             exit 0
