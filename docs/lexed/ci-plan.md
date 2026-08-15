@@ -198,6 +198,7 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   `bundle-<arch>`, fetch the Apple credentials from Doppler (§4), untar the
   `.app`, then re-sign properly and reseal. All of it lives in
   `script/lexed-sign-mac`, extracted from `bundle-mac` as recommended:
+
   1. Temp keychain with a minted random password, unique per invocation
      (pid + random suffix — fixed paths collide when two passes share a job);
      import the p12, `set-key-partition-list`, **splice into `list-keychains`**
@@ -212,7 +213,7 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
   3. **Reseal the DMG from the signed `.app`** (`hdiutil create -format UDZO`
      with an `/Applications` symlink) — re-bundling would strip the signature.
      Sign the DMG.
-  4. Notarize with `notarytool submit --wait --timeout 30m`, preferring the
+  4. Notarize with `notarytool submit --wait --timeout 15m`, preferring the
      App Store Connect key and falling back to Apple-ID credentials (§4). The
      verdict is read out of the JSON rather than inferred from the exit code,
      and a non-`Accepted` verdict pulls `notarytool log` into the failure
@@ -221,6 +222,27 @@ prepare ──▶ build (matrix) ──▶ sign ──▶ publish
      a `spctl --assess --type install` gate.
   5. The remote-server binary is signed here too, so nothing unsigned is ever
      published. Upload `signed-<arch>`.
+
+  Every blocking call in `script/lexed-sign-mac` runs under a pure-bash
+  watchdog with its own budget — macOS ships no `timeout(1)` and a runner may
+  not have coreutils. That is what lets the job cap sit at 30 minutes: a
+  blocked call now names itself and dies in minutes instead of being
+  indistinguishable from slow work until the job timeout fires. It exists
+  because of this line, which hung a CI job for a full hour and printed
+  nothing:
+
+  ```bash
+  keychain_password="$(tr -dc 'A-Za-z0-9' </dev/urandom | head -c 32)"
+  ```
+
+  **A command substitution waits on every member of its pipeline**, so an
+  infinite source belongs in no `$( )`. `head` exits at its byte count while
+  `tr` is still reading `/dev/urandom`, not yet having attempted the write
+  that would earn it a SIGPIPE, and `$( )` waits for it regardless. It
+  completed instantly in five local runs, which is the argument against the
+  idiom and not for it. `openssl rand -hex 32` is one process with nothing to
+  race.
+
 - **publish** (ubuntu): download `release-notes` + all `signed-*`, then
   idempotently: `gh release create --verify-tag --notes-file …` if absent else
   `gh release edit`; `gh release upload --clobber` for the DMGs and
