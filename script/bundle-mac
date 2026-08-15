@@ -307,7 +307,7 @@ function sign_binary() {
 function upload_debug_symbols() {
     if [ "$local_install" = true ]; then
         echo "local install; skipping sentry upload."
-    elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
+    elif [[ -n "${SENTRY_AUTH_TOKEN:-}" && -n "${SENTRY_ORG:-}" && -n "${SENTRY_PROJECT:-}" ]]; then
         echo "Uploading zed debug symbols to sentry..."
         exe_path="target/${target_triple}/release/Lexed"
         if ! dsymutil --flat "target/${target_triple}/${target_dir}/lexed" 2> target/dsymutil.log; then
@@ -325,7 +325,7 @@ function upload_debug_symbols() {
         # Try uploading up to 3 times
         for attempt in 1 2 3; do
             echo "Sentry upload attempt $attempt..."
-            if sentry-cli debug-files upload --include-sources --wait -p zed -o zed-dev \
+            if sentry-cli debug-files upload --include-sources --wait -p "$SENTRY_PROJECT" -o "$SENTRY_ORG" \
                 "target/${target_triple}/${target_dir}/lexed.dwarf" \
                 "target/${target_triple}/${target_dir}/remote_server.dwarf"; then
                 break

@@ -225,6 +225,96 @@ jobs:
           df -h
           du -sh target 2>/dev/null || true
 
+  # The instrumented baseline. Linux is the only target where both accelerators
+  # run together — the shared sccache bucket and mold — so its release-profile
+  # time is the number the macOS build's cost can be read against, decomposing
+  # that difference into Apple codegen, no mold, and runner class rather than
+  # leaving it opaque. It produces a shippable artifact as a side effect; there
+  # is no sign stage, so it flows straight to publish.
+  build_linux:
+    name: Build (linux-x86_64)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # Same trap as the macOS build: sccache's server exits after 600 idle
+      # seconds and this build goes longer than that between compile requests.
+      SCCACHE_IDLE_TIMEOUT: "0"
+      # mold has to arrive through RUSTFLAGS, NOT through ../.cargo/config.toml
+      # the way lexed_checks.yml selects it. bundle-linux exports its own
+      # RUSTFLAGS, and per cargo#5376 that overrides config-file rustflags
+      # entirely — measured in a container: with RUSTFLAGS set to anything else,
+      # a config.toml asking for mold is silently ignored and the link falls
+      # back to the default linker. bundle-linux appends to ${RUSTFLAGS:-}, so
+      # setting it here survives.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
+      ZED_RELEASE_CHANNEL: stable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Reclaim runner disk space
+        run: ./script/lexed-ci-reclaim-disk
+
+      - uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+        with:
+          key: release-linux-x86_64
+
+      - name: Enable sccache (GCS)
+        uses: arthur-debert/release/.github/actions/setup-sccache@96398d00d107d6336c945d1b690a7f2845d01450 # v3.11.0
+        with:
+          gcs-key: ${{ secrets.SCCACHE_GCS_KEY }}
+
+      - name: Install Linux dependencies
+        run: ./script/linux
+
+      - name: Install mold
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mold binutils
+
+      # bundle-linux runs under `set -x`, so the runner's per-line timestamps
+      # give the split between its two cargo passes for free.
+      - name: Bundle
+        run: ./script/bundle-linux
+
+      # Read out of the artifact, never off the flag: the whole point of the
+      # RUSTFLAGS route above is that asking for mold and getting it are
+      # different things.
+      - name: Confirm mold actually linked the binary
+        run: |
+          binary="target/x86_64-unknown-linux-gnu/release/lexed"
+          readelf -p .comment "$binary" || true
+          if readelf -p .comment "$binary" 2>/dev/null | grep -qi mold; then
+            echo "mold confirmed in $binary"
+          else
+            echo "::warning::mold is not recorded in ${binary}'s .comment section"
+          fi
+
+      - name: Collect the bundle
+        run: |
+          mkdir -p artifacts
+          cp target/release/lexed-linux-x86_64.tar.gz artifacts/
+          cp target/lexed-remote-server-linux-x86_64.gz artifacts/
+          ls -la artifacts
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundle-linux-x86_64
+          path: artifacts
+          if-no-files-found: error
+
+      - name: sccache stats
+        if: always()
+        run: sccache --show-stats || true
+
+      - name: Disk usage
+        if: always()
+        run: |
+          df -h
+          du -sh target 2>/dev/null || true
+
   sign:
     name: Sign (${{ matrix.arch }})
     needs: [prepare, build]
@@ -279,7 +369,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: [prepare, build, sign]
+    needs: [prepare, build, build_linux, sign]
     if: needs.prepare.outputs.signing == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -305,6 +395,14 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: signed-*
+          merge-multiple: true
+          path: release-assets
+
+      # Linux has no sign stage — nothing notarizes an ELF — so its bundle goes
+      # from build straight to the release.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bundle-linux-*
           merge-multiple: true
           path: release-assets
 
