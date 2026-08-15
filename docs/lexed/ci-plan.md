@@ -47,7 +47,7 @@ ships in this tree.
   It is the one workflow missing it; `cargo xtask workflows` fails on the repo
   today because of it.
 
-- The guard is at 59/60. No step in this plan touches a new upstream file, but
+- The guard is at 60/70. No step in this plan touches a new upstream file, but
   the next unrelated change might; when it happens, raise the ceiling
   deliberately in the workflow file with a commit message that says why
   (fork-strategy §2).
@@ -102,14 +102,14 @@ Jobs (independent, `fail-fast: false`):
   `../.cargo/config.toml` (Zed's CI-only `-D warnings` trick — free, zero
   upstream diff), `Swatinem/rust-cache@v2`, `script/linux` +
   `script/download-wasi-sdk` on ubuntu, then `./script/clippy`.
-- **tests** (ubuntu, macos): `cargo nextest run --workspace --no-fail-fast
---no-tests=warn` honoring `.config/nextest.toml`, via the `run_tests`
-  composite action. **Open question — runtime.** Zed runs this on 32-vCPU
-  machines; on 4-core hosted runners the full suite may be multi-hour. Start
-  with a PR-scoped filterset (Zed's own pattern: `-E 'rdeps(<changed pkgs>)'`
-  computed by `script/lexed-changed-crates`) plus always `lex_*` crates, and
-  run the full workspace suite on `main` pushes only. Measure, then decide
-  whether to buy larger hosted runners.
+- **tests** (ubuntu): `cargo nextest run --workspace --no-fail-fast
+--no-tests=warn` honoring `.config/nextest.toml`. A pull request narrows the
+  run with `-E 'rdeps(<changed pkgs>)'` (Zed's own pattern) computed by
+  `script/lexed-changed-crates` and unioned with the `lex_*` crates; a push to
+  `main` runs the whole suite. The filterset scopes execution only — see
+  "Why compilation stays unscoped" below, which is now a decision rather than
+  an accident. **Open question — runtime.** Zed runs this on 32-vCPU machines;
+  measure on hosted runners, then decide whether to buy larger ones.
 - **deps & security** (ubuntu): `cargo machete`, `cargo audit`, `cargo deny
 check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
   stream; this is the fork's security posture) and are net-new: add
@@ -118,6 +118,203 @@ check` — audit/deny are prescribed by fork-strategy §6 (Zed has no CVE
 - **licenses** (ubuntu, gated on `Cargo.lock`/`script/*licenses*` changes):
   `script/check-licenses` then `script/generate-licenses`. Pre-verify the
   `lex_*` crates carry the `LICENSE-GPL` symlinks the checker demands.
+
+### Excluded tests, and the runner ceiling
+
+The first full-workspace run on a push to `main` failed 36 tests, and **20 of
+them were this fork's own doing**: `assets/settings/default.json` is both the
+product configuration and the fixture upstream's tests assert against, so
+turning off `auto_update`, telemetry and edit predictions broke the tests that
+exercise them. `.config/nextest.toml` is upstream-owned, so the exclusions live
+in `.config/lexed-nextest.toml`, the fork's test policy layer, each with its
+reason beside it. Read that list before adding to it; every entry is coverage
+given up on purpose.
+
+They began as a shell array inside the workflow, which meant the policy was
+only really expressible in CI and only readable as YAML. It is now a
+`default-filter` in the layer, which is versioned, applies identically to
+`script/lexed-test` on a laptop, and can be lifted for a single run with
+`--ignore-default-filter` to check whether an entry is still earning its place.
+The mechanism, including the two properties of nextest's layering that make it
+work, is described in fork-strategy.md §3.
+
+The move was proved rather than assumed: `cargo nextest list --workspace` under
+the old shell-array expression and under the policy layer came back
+byte-identical at 8109 entries, and the full suite then passed 8109 of 8109
+with 38 skipped — 19 pre-existing `#[ignore]`s and the 19 the policy excludes.
+
+Seventeen of those twenty are not excluded. They all reach the defaults through
+`SettingsStore::test()`, so `crates/settings/src/settings_file.rs` restores the
+upstream values in the override block `test_settings()` already merges — the
+shipped defaults are untouched. That spent the last slot under the old ceiling
+of 60; the ceiling has since been raised deliberately to 70, so the guard now
+stands at **60 of 70**. A later settings-overlay refactor keeping fork defaults
+out of `default.json` would remove the need for it and free two slots.
+
+Separately, and not caused by the fork: **the suite was at the edge of what a
+4-core hosted runner can finish inside the 60-second per-test timeout.**
+`worktree::test_random_worktree_changes` took 54s of its 60s budget on the run
+that passed, and later runs of the same code came in ~50% slower and timed it
+out along with two other randomized tests. The first fix was `--test-threads 3`
+on the full-suite path — one fewer than the runner has cores.
+
+That was not just a stay of execution. Leaving a core spare made the suite
+**faster**, 1371s against 1870s at four threads, because the long randomized
+tests stop fighting each other for CPU.
+
+It stopped being enough. Three consecutive runs in one night drew slow runners
+and timed out `test_random_worktree_changes` at 60.0s on all three,
+`test_random_multibuffer` on two and
+`following_tests::test_peers_following_each_other` on one — the same three
+tests, on code that had gone green hours earlier with
+`test_random_worktree_changes` passing in 40.2s.
+
+**The budget can in fact be raised from the fork side**, which an earlier note
+here denied. `.config/nextest.toml` is still untouchable, but nextest's
+`--tool-config-file` inserts a config layer below the repository's and above
+nextest's defaults, and nextest resolves each setting independently: it takes
+the first matching override that actually specifies the setting being asked
+for. Upstream's override for `test_random_worktree_changes` sets only
+`priority`, so `slow-timeout` falls through to the fork's layer. That layer is
+`.config/lexed-nextest.toml`, a fork-added file, and it grants those three
+tests 120s. Verified empirically before it was relied on, since the precedence
+rules alone did not settle it.
+
+The same layer carries the exclusions, by a second and different route:
+`default-filter` does _not_ layer as a profile-level setting — one written that
+way loses to the upstream config — but it does when attached to a
+platform-keyed override, and filtersets given on the command line are then
+intersected with it rather than replacing it. That last property is what lets
+CI narrow a pull request to the crates it touched without reopening an excluded
+test. Both behaviours were measured, not assumed.
+
+A raise is only honest for a test that passes given time; the assertions still
+run and a real hang still terminates. A test that fails for any other reason
+still gets excluded with its reason — `test_extension_store_with_test_extension`
+is the case in point: upstream already grants it 300s and it still failed at
+62.5-62.8s, because the 60s it exhausts is its own, inside the test.
+
+If the suite grows enough to creep back toward the limit, the next lever is a
+larger runner rather than more exclusions. That end state stands; larger runners
+cost real money even on a public repository, so the decision sits with the
+human, and the entries above are the interim.
+
+### A test that fails only on slow runners
+
+`language::buffer_tests::test_bracket_colorization_indices_remain_stable_across_row_chunks`
+is excluded, and it is the one exclusion here that is not about a deliberate
+fork decision. On identical code it passed in 0.280s on the runner that ran
+`main`, and failed in 0.771s and 0.709s on two slower runners — a wrong value,
+`None` where `Some(2)` was expected at `crates/language/src/buffer_tests.rs:1454`,
+not a timeout. Reducing thread count fixed every other slow-runner failure and
+did not fix this one.
+
+What makes it worth writing down rather than shrugging at: the test is
+synchronous — `#[gpui::test] fn …(cx: &mut App)`, no awaits, no timers — so
+under GPUI's deterministic scheduler it should not be sensitive to machine speed
+at all. The leading suspicion, unconfirmed, is that the syntax parse for a
+fixture deliberately larger than `MAX_BYTES_TO_QUERY` runs on a real background
+thread rather than under the test scheduler, so `buffer.snapshot()` taken
+immediately after `with_language` can be queried before the tree exists. That
+would make the test racy everywhere and merely more visible on slow hardware.
+It is not reproducible on a fast machine by running the test alone.
+
+### Why compilation stays unscoped
+
+`--workspace` compiles and links every test binary in the workspace whether or
+not the filterset will run it: ~75 GB of target directory and 18-33 minutes,
+against the ~37 seconds of execution the filterset actually saves. A pull
+request touching no crates still spent 22 min 38 s in the tests job to run the
+90 tests its filterset selected out of 8141. The obvious fix is to drop
+`--workspace -E ...` for `-p <reverse-dependency closure of the changed
+crates>` so that cargo builds only what the closure needs. That was built and
+measured, and it must not be adopted. `script/lexed-test-scope-probe`
+reproduces the measurement.
+
+The prize was real: a pull request touching only the `lex_*` crates has a
+closure of 3 members and 3 test binaries, against 264 workspace-wide. It is
+still not worth taking.
+
+Cargo resolves features across exactly the packages it was asked to build.
+`--workspace` makes every member a build root, so every member gets its own
+`[features] default`. A `-p` subset demotes the members outside the closure to
+plain dependencies, and five of them are declared `default-features = false` in
+`[workspace.dependencies]`:
+
+```toml
+gpui = { path = "crates/gpui", default-features = false }
+```
+
+So `gpui` loses `font-kit` — along with `default`, `inspector` and
+`windows-manifest` — in every closure that does not itself contain `gpui`,
+which is all four measured below. The feature is not cosmetic:
+`crates/gpui_macos/src/platform.rs` selects the real `MacTextSystem` under
+`#[cfg(feature = "font-kit")]` and a stub that logs "no text will be rendered"
+under `#[cfg(not(...))]`, and `gpui_wgpu`'s `find_best_match` degrades to a
+naive font match the same way. The tests would still compile and still pass,
+against a different text system than the one `main` tests.
+
+Two commands show it:
+
+```console
+$ cargo tree -e features --prefix none --format '{p}|{f}' -p gpui | grep '^gpui v' | sort -u
+gpui v0.2.2|default,font-kit,wayland,windows-manifest,x11
+$ cargo tree -e features --prefix none --format '{p}|{f}' -p zed | grep '^gpui v' | sort -u
+gpui v0.2.2|backtrace,...,test-support,wayland,x11
+gpui v0.2.2|...,screen-capture
+```
+
+Neither `-p zed` line carries `default` or `font-kit`; both `-p gpui` lines do.
+
+The same mechanism drops `test-support` from crates outside the closure, and
+`test-support` is a behaviour switch rather than extra API: gpui selects its
+deterministic test scheduler under `#[cfg(any(test, feature = "test-support"))]`
+(`crates/gpui/src/executor.rs`), `paths::global_gitignore_path` returns a fixed
+path under it and reads the developer's real git config without it, and 21
+sites across 13 crates follow that pattern.
+
+Measured divergence between the two builds, by the crate a pull request changes:
+
+| changed crate      | closure    | members with different features | third-party |
+| ------------------ | ---------- | ------------------------------- | ----------- |
+| `lex_*` only       | 3 of 252   | 31                              | 56          |
+| `markdown_preview` | 9 of 252   | 23                              | 55          |
+| `release_channel`  | 144 of 252 | 6                               | 29          |
+| `paths`            | 145 of 252 | 6                               | 29          |
+
+The closure itself is not in doubt — it is the reverse-dependency closure over
+workspace members across all dependency kinds, and it matches
+`cargo tree --workspace --invert <crate> --edges normal,build,dev` exactly for
+every row. Note the shape of the table: the smaller the closure, the larger the
+divergence, so the cheapest pull requests would be the least faithful ones.
+
+And the two invocations list the _same tests_. For a branch touching only the
+`lex_*` crates, `--workspace -E 'rdeps(lex_preview)|rdeps(lex_bundled_extensions)'`
+and `-p lex_preview -p lex_bundled_extensions -p zed` produce byte-identical
+lists of the same 90 test IDs — one from 264 test binaries, the other from 3.
+That identity is the hazard rather than the reassurance: no counts change, no
+summary changes, and nothing a reviewer could read would reveal that the code
+those 90 tests exercise had changed underneath them.
+
+The artifacts do not transfer either, which is the same fact from the other
+side. Pointing a fully warm full-workspace target at the closure recompiled 47
+workspace crates and ran over 12 minutes before listing a single test; going
+back cost 7 crates and 62 s, because the target directory then holds both
+feature resolutions side by side — 71 GB became 93 GB. So the closure build is
+a rebuild against whatever `main` cached, once per distinct closure, and it
+grows the directory on the one job that already runs
+`script/lexed-ci-reclaim-disk` to fit 75 GB on a stock runner.
+
+Cargo offers no way out. `--features paths/test-support` is rejected outright
+for a package outside the `-p` selection ("none of the selected packages
+contains this feature"), and nextest has no option to build a subset of test
+binaries while keeping workspace-wide feature resolution. Scoping compilation
+and preserving what the tests exercise are mutually exclusive here.
+
+The levers that remain do not change what is compiled: cutting CI debug info
+(`CARGO_PROFILE_DEV_DEBUG` / `CARGO_PROFILE_TEST_DEBUG`; `[profile.dev]` is
+`debug = "limited"` today), larger runners, and the sccache and mold already in
+place.
 
 `lexed_diff_guard.yml` stays as-is (separate, already working).
 
@@ -314,7 +511,7 @@ never writes into the caller's checkout. The trap only deletes a
 target directory the script created; one handed in through the environment
 belongs to the caller.
 
-CI cost is the reason the job carries `timeout-minutes: 90`, the disk reclaim
+CI cost is the reason the job carries `timeout-minutes: 60`, the disk reclaim
 step, and `setup-sccache` wired exactly as `lexed_checks.yml` does it. The
 throwaway worktree's target directory is new every week, so `Swatinem/rust-cache`
 has nothing to restore and sccache's shared bucket is the only cache that can
@@ -332,7 +529,10 @@ The steady state has a bad case worth budgeting for, though: when upstream
 touches a foundational crate, everything downstream of it recompiles and the
 run approaches a cold build again. The measurement run here landed on exactly
 that — upstream's tip was `gpui: Unify performance tracking under the profiler
-feature`. So the 90-minute timeout is sized for a cold run, not the median one.
+feature`. So the timeout is sized for a cold run, not the median one. It is set
+to 60 minutes, which the first real dispatch should confirm is enough for that
+bad case; the canary has never actually run, so the number is still a guess
+being tested rather than a measurement.
 
 Not included: `script/download-wasi-sdk` (the WASI SDK is a runtime download for
 building extensions, not a compile-time dependency) and the `.cargo/ci-config.toml`

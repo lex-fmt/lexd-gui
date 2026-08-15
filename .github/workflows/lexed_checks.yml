@@ -64,7 +64,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
+    # Measured worst case is 24m48s truly cold, 13-15m with sccache warm, so 30
+    # is deliberately tight: an overrun means something regressed in the build
+    # or the cache stopped working. Investigate it, do not raise this number.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -134,7 +137,16 @@ jobs:
   tests:
     name: Tests (ubuntu-latest)
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    # Sized on whole-job wall clock, not on the test-execution figure: the job
+    # also pays ~4-8 min of setup and ~12-14 min compiling test binaries.
+    # Observed totals run 39 min on a healthy runner to past 45 on a slow one,
+    # so the 30 the other jobs use is not available here. 60 is that spread plus
+    # margin, still a 3x cut from the old 180.
+    #
+    # Sizing this one tight is a false economy, which a 45 tried here proved: a
+    # cap that falls inside the spread does not catch anything, it just converts
+    # a readable red run into a cancelled one with no summary to read.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -173,6 +185,13 @@ jobs:
       - name: Install Linux dependencies
         run: ./script/linux
 
+      # gpui_wgpu's atlas tests ask wgpu for any adapter across all backends and
+      # a stock runner has none: "vulkan drivers/libraries could not be loaded".
+      # Lavapipe is a software Vulkan device, which is enough for these tests —
+      # they allocate and free atlas tiles rather than measure rendering.
+      - name: Install a software Vulkan driver
+        run: sudo apt-get install -y mesa-vulkan-drivers
+
       - name: Download WASI SDK
         run: ./script/download-wasi-sdk
 
@@ -208,14 +227,34 @@ jobs:
       - name: Limit target directory size
         run: ./script/clear-target-dir-if-larger-than 350 200
 
+      # What runs and what does not is the fork's test policy, and it lives in
+      # `.config/lexed-nextest.toml` rather than here — one file, versioned,
+      # with the reason beside every entry, and usable locally through
+      # `script/lexed-test`. This step only decides *scope*.
+      #
+      # The policy layer applies on both paths on purpose: a pull request that
+      # touches `settings` or `auto_update` reaches the excluded tests through
+      # `rdeps()` just as a push to main does. Command-line filtersets are
+      # intersected with the layer's `default-filter`, so the scope below
+      # narrows the run without reopening anything the policy excludes.
+      #
+      # `--tool-config-file` requires an absolute path, hence `GITHUB_WORKSPACE`.
       - name: cargo nextest
         env:
           FILTERSET: ${{ steps.scope.outputs.filterset }}
         run: |
+          tool_config="lexed:${GITHUB_WORKSPACE}/.config/lexed-nextest.toml"
           if [ -n "$FILTERSET" ]; then
-            cargo nextest run --workspace --no-fail-fast --no-tests=warn -E "$FILTERSET"
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn \
+              --tool-config-file "$tool_config" -E "$FILTERSET"
           else
-            cargo nextest run --workspace --no-fail-fast --no-tests=warn
+            # One fewer thread than the runner has cores. The whole suite runs
+            # only here, and several of its randomized tests sit close to the
+            # 60s per-test budget in `.config/nextest.toml` — one measured 54s
+            # of its 60s on the run that passed. Leaving a core spare trades a
+            # little wall clock for the headroom those tests need.
+            cargo nextest run --workspace --no-fail-fast --no-tests=warn --test-threads 3 \
+              --tool-config-file "$tool_config"
           fi
 
       - name: sccache stats

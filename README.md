@@ -63,10 +63,21 @@ Every rebase updates it.
 
 Same as upstream Zed: `cargo build -p zed` (see `docs/src/development/` for
 platform setup). Use `./script/clippy` instead of `cargo clippy`, and
-`cargo nextest run` rather than `cargo test`. The project's testing layers —
-from crate tests through workspace-level gpui tests to sandboxed real-app
-launches with `--user-data-dir` — are documented in the `testing-lexed` skill
-under `.claude/skills/`.
+`script/lexed-test` rather than `cargo test` or a bare `cargo nextest run` —
+it is a thin wrapper that applies the fork's test policy, so it answers the
+same way CI does. It takes nextest's arguments: `script/lexed-test` for the
+workspace, `script/lexed-test -p lex_preview` for one crate.
+
+That policy — which upstream tests this fork excludes and which ones get a
+longer per-test budget, each with the reason beside it — lives in
+[`.config/lexed-nextest.toml`](.config/lexed-nextest.toml). It is a layer
+*under* Zed's own `.config/nextest.toml`, which the fork does not edit; see
+§3 of [`docs/lexed/fork-strategy.md`](docs/lexed/fork-strategy.md) for how
+that layering works and when to prefer a budget raise to an exclusion.
+
+The project's testing layers — from crate tests through workspace-level gpui
+tests to sandboxed real-app launches with `--user-data-dir` — are documented
+in the `testing-lexed` skill under `.claude/skills/`.
 
 Local tooling and the pre-commit/pre-push gate are described in
 [`docs/lexed/dev-setup.md`](docs/lexed/dev-setup.md); run `lefthook install`
