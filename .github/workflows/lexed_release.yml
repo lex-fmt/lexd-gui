@@ -235,7 +235,14 @@ jobs:
     name: Build (linux-x86_64)
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Measured, not guessed. The first run was killed at 60 minutes with a live
+    # rustc still working: 1489 crates compiled and sccache reporting a 0.00%
+    # Rust hit rate, because the bucket had no Linux release-profile entries at
+    # all. That is cold-fill, and the macOS jobs paid the same toll on their
+    # first run. 180 covers a cold Linux build with margin and sits well above
+    # the warm number this job exists to measure; revise down once two warm runs
+    # agree.
+    timeout-minutes: 180
     env:
       # Same trap as the macOS build: sccache's server exits after 600 idle
       # seconds and this build goes longer than that between compile requests.
